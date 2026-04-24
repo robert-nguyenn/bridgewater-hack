@@ -105,6 +105,20 @@ openai_key = os.environ["OPENAI_API_KEY"]
 hf_token = os.environ["HF_TOKEN"]
 ```
 
+## Troubleshooting
+
+**`ModuleNotFoundError: No module named 'numpy._core._multiarray_umath'`** (or similar C-extension error) — your venv's Python version doesn't match the installed wheels. Fix:
+```bash
+pip install --force-reinstall -r requirements.txt
+```
+
+**`AttributeError: '_thread.RLock' object has no attribute '_recursion_count'`** on script exit — cosmetic, safe to ignore. Known `multiprocess` shutdown quirk on Python 3.12.
+
+**PowerShell activation error** (`execution of scripts is disabled`):
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+```
+
 ## Dependencies
 
 - [huggingface_hub](https://github.com/huggingface/huggingface_hub) — HF model/dataset access
