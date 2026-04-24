@@ -1,22 +1,29 @@
-"""Analog retrieval.
+"""Analog retrieval with semantic text + structural similarity.
 
-Given a StructuredPolicy and the current macro state, find k nearest
-historical analogs from the event catalog. For each analog, report what
-the realized response was over 30, 90, 180 days after the event.
+Similarity is a weighted hybrid:
 
-Feature vector:
-    - one hot policy type (5 dims)
-    - normalized magnitude (1 dim, z scored within magnitude_unit)
-    - macro state at event date (unrate, cpi yoy, fed funds, 10y yield,
-      equity 6m return, dxy change 6m)
+  final_sim = 0.60 * text_sim + 0.20 * type_match + 0.20 * magnitude_sim
 
-Similarity: cosine over standardized features.
+  text_sim       : cosine between sentence-transformer embeddings of the
+                   scenario raw_input and each event description. Primary
+                   signal, captures mechanism similarity even when one-hot
+                   categories match only superficially.
+  type_match     : 1.0 if policy_types match, else 0.3
+  magnitude_sim  : 1 - |log ratio| / 5 if magnitude units match, else 0.5
 
-Response readout: for each analog, pull the response series from the
-unified loader and compute pct or pp change at 30 60 180 days.
+The old one-hot + macro-state feature approach had a failure mode where
+all events of a given policy_type clustered at similarity >= 0.85 for any
+query of that type, regardless of actual relevance. Semantic text
+embeddings fix that.
+
+Embeddings are lazy loaded once per process. Event embeddings are cached
+to disk at data/cache/analog_embeddings.npz keyed by a sha of the catalog
+CSV contents.
 """
 from __future__ import annotations
 
+import hashlib
+import math
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Optional
@@ -29,17 +36,25 @@ from src.schemas import PolicyType, StructuredPolicy
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 EVENT_CATALOG = PROJECT_ROOT / "configs" / "event_catalog.csv"
+EMBED_CACHE = PROJECT_ROOT / "data" / "cache" / "analog_embeddings.npz"
+EMBED_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 
 POLICY_TYPE_ORDER = [pt.value for pt in PolicyType]
 
-# Macro state features pulled from FRED Tier 1
+# Macro state features (kept for backward compat + as a tiebreaker feature
+# we may surface in the UI, but they no longer drive the primary score).
 MACRO_FEATURES = {
     "unrate":   "UNRATE",
-    "cpi_yoy":  "CPIAUCSL",     # compute yoy inside
+    "cpi_yoy":  "CPIAUCSL",
     "fed_funds": "DFF",
     "dgs10":    "DGS10",
     "dxy":      "DTWEXBGS",
 }
+
+# Hybrid weights
+W_TEXT = 0.60
+W_TYPE = 0.20
+W_MAG = 0.20
 
 
 def _load_catalog() -> pd.DataFrame:
@@ -105,6 +120,105 @@ def _cosine(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.dot(a, b) / (na * nb))
 
 
+# ---------------------------------------------------------------------------
+# Embedding cache
+# ---------------------------------------------------------------------------
+_EMBED_MODEL = None
+_EVENT_EMBED_CACHE: Optional[tuple[str, np.ndarray, list[dict]]] = None
+
+
+def _get_model():
+    global _EMBED_MODEL
+    if _EMBED_MODEL is None:
+        from sentence_transformers import SentenceTransformer
+        _EMBED_MODEL = SentenceTransformer(EMBED_MODEL)
+    return _EMBED_MODEL
+
+
+def _catalog_sha() -> str:
+    return hashlib.sha1(EVENT_CATALOG.read_bytes()).hexdigest()
+
+
+def _event_text(row: dict) -> str:
+    """What we embed for each event. Pandas NaN and None both coerce to ''."""
+    def _str(v):
+        if v is None:
+            return ""
+        try:
+            if isinstance(v, float) and math.isnan(v):
+                return ""
+        except TypeError:
+            pass
+        return str(v).strip()
+    parts = [_str(row.get("description")), _str(row.get("notes")), _str(row.get("subject"))]
+    return ". ".join(p for p in parts if p).strip()
+
+
+def _ensure_event_embeddings(catalog_rows: list[dict]) -> np.ndarray:
+    """Embed catalog events. Cached to disk by catalog content hash."""
+    global _EVENT_EMBED_CACHE
+    sha = _catalog_sha()
+
+    if _EVENT_EMBED_CACHE and _EVENT_EMBED_CACHE[0] == sha:
+        return _EVENT_EMBED_CACHE[1]
+
+    if EMBED_CACHE.exists():
+        try:
+            npz = np.load(EMBED_CACHE, allow_pickle=True)
+            if str(npz.get("sha", "")) == sha:
+                arr = npz["emb"]
+                _EVENT_EMBED_CACHE = (sha, arr, catalog_rows)
+                return arr
+        except Exception:
+            pass
+
+    model = _get_model()
+    texts = [_event_text(r) for r in catalog_rows]
+    arr = model.encode(texts, convert_to_numpy=True, show_progress_bar=False, normalize_embeddings=True)
+    EMBED_CACHE.parent.mkdir(parents=True, exist_ok=True)
+    np.savez(EMBED_CACHE, emb=arr, sha=sha)
+    _EVENT_EMBED_CACHE = (sha, arr, catalog_rows)
+    return arr
+
+
+def _embed_query(text: str) -> np.ndarray:
+    model = _get_model()
+    return model.encode([text], convert_to_numpy=True, show_progress_bar=False, normalize_embeddings=True)[0]
+
+
+# ---------------------------------------------------------------------------
+# Similarity components
+# ---------------------------------------------------------------------------
+def _type_match(query_type: str, event_type: str) -> float:
+    return 1.0 if query_type == event_type else 0.3
+
+
+def _magnitude_sim(
+    query_mag: float,
+    query_unit: str,
+    event_mag: float,
+    event_unit: str,
+) -> float:
+    """If units match, compare magnitudes on a log scale. Else neutral 0.5."""
+    q_unit = (query_unit or "").strip().lower()
+    e_unit = (event_unit or "").strip().lower()
+    # Treat similar unit names as the same
+    if q_unit != e_unit:
+        return 0.5
+    a, b = abs(float(query_mag)), abs(float(event_mag))
+    if a == 0 or b == 0:
+        return 0.5
+    try:
+        ratio = math.log10(max(a, b) / min(a, b))   # 0 when equal, grows with divergence
+    except ValueError:
+        return 0.5
+    # ratio of 0 -> 1.0, ratio of 2 (100x off) -> 0.2
+    return max(0.0, 1.0 - ratio / 2.5)
+
+
+# ---------------------------------------------------------------------------
+# Main entry
+# ---------------------------------------------------------------------------
 def retrieve_analogs(
     policy: StructuredPolicy,
     response_series: Optional[pl.DataFrame] = None,
@@ -112,58 +226,45 @@ def retrieve_analogs(
 ) -> list[dict]:
     """Find k nearest historical analogs from the event catalog.
 
-    Parameters
-    ----------
-    policy           the current scenario to match
-    response_series  optional [date, value] frame to compute realized responses
-    k                number of analogs to return
-
-    Returns
-    -------
-    list of dicts, each containing
-        event_name, date, policy_type, magnitude, similarity,
-        macro_state_at_event, response_30d, response_90d, response_180d
+    Returns list of dicts, each with a similarity breakdown so the UI can
+    show WHY the analog was picked.
     """
     catalog = _load_catalog()
-    macro = _macro_series()
-    feat_names = list(MACRO_FEATURES.keys())
-
-    # Feature matrix for every event in catalog
-    rows = []
-    for _, row in catalog.iterrows():
-        state = _macro_state(macro, row["date"])
-        rows.append(
-            {
-                "name": row["description"],
-                "date": row["date"],
-                "policy_type": row["policy_type"],
-                "subject": row["subject"],
-                "magnitude": float(row["magnitude"]),
-                "state": state,
-            }
-        )
-    if not rows:
+    catalog_rows = [
+        {
+            "description": row.get("description", ""),
+            "subject": row.get("subject", ""),
+            "notes": row.get("notes", ""),
+            "policy_type": row["policy_type"],
+            "magnitude": float(row["magnitude"]),
+            "magnitude_unit": row.get("magnitude_unit", ""),
+            "date": row["date"],
+        }
+        for _, row in catalog.iterrows()
+    ]
+    if not catalog_rows:
         return []
 
-    mat = np.vstack([
-        _feature_vector(r["policy_type"], r["magnitude"], r["state"], feat_names)
-        for r in rows
+    # Embeddings
+    event_emb = _ensure_event_embeddings(catalog_rows)
+    query_text = (policy.raw_input or policy.subject or "").strip()
+    query_emb = _embed_query(query_text)
+    text_sims = event_emb @ query_emb   # both normalized, so dot == cosine
+
+    # Structural components per event
+    type_sims = np.array([
+        _type_match(policy.policy_type.value, r["policy_type"]) for r in catalog_rows
     ])
-    mat_z = _zscore(mat)
+    mag_sims = np.array([
+        _magnitude_sim(policy.magnitude, policy.magnitude_unit,
+                       r["magnitude"], r["magnitude_unit"])
+        for r in catalog_rows
+    ])
 
-    today = pd.Timestamp.utcnow().tz_localize(None).normalize()
-    query_state = _macro_state(macro, today)
-    query_vec = _feature_vector(policy.policy_type.value, policy.magnitude, query_state, feat_names)
-    # Standardize query using the same mean and sd as the matrix
-    mu = np.nanmean(mat, axis=0)
-    sd = np.nanstd(mat, axis=0)
-    sd[sd == 0] = 1.0
-    query_z = np.nan_to_num((query_vec - mu) / sd)
+    final = W_TEXT * text_sims + W_TYPE * type_sims + W_MAG * mag_sims
+    order = np.argsort(-final)[:k]
 
-    sims = np.array([_cosine(query_z, mat_z[i]) for i in range(mat_z.shape[0])])
-    order = np.argsort(-sims)[:k]
-
-    # Response readouts
+    # Optional response readout
     resp_s = None
     if response_series is not None:
         resp_pdf = response_series.select(["date", "value"]).to_pandas()
@@ -185,18 +286,23 @@ def retrieve_analogs(
 
     out = []
     for idx in order:
-        r = rows[idx]
+        r = catalog_rows[idx]
+        ev_date = pd.to_datetime(r["date"])
         out.append({
-            "event_name": r["name"],
-            "event_date": r["date"].date(),
+            "event_name": r["description"],
+            "event_date": ev_date.date(),
             "policy_type": r["policy_type"],
             "subject": r["subject"],
             "magnitude": r["magnitude"],
-            "similarity": float(sims[idx]),
-            "macro_state_at_event": r["state"],
-            "macro_state_today": query_state,
-            "response_30d_pct": _pct_change_at(r["date"], 30),
-            "response_90d_pct": _pct_change_at(r["date"], 90),
-            "response_180d_pct": _pct_change_at(r["date"], 180),
+            "magnitude_unit": r["magnitude_unit"],
+            "similarity": float(final[idx]),
+            "similarity_breakdown": {
+                "text": float(text_sims[idx]),
+                "type_match": float(type_sims[idx]),
+                "magnitude": float(mag_sims[idx]),
+            },
+            "response_30d_pct": _pct_change_at(ev_date, 30),
+            "response_90d_pct": _pct_change_at(ev_date, 90),
+            "response_180d_pct": _pct_change_at(ev_date, 180),
         })
     return out

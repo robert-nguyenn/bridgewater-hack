@@ -55,8 +55,8 @@ HYPOTHESIS_TOOL_SCHEMA: dict[str, Any] = {
     "properties": {
         "hypotheses": {
             "type": "array",
-            "minItems": 3,
-            "maxItems": 5,
+            "minItems": 4,
+            "maxItems": 8,
             "items": {
                 "type": "object",
                 "properties": {
@@ -232,7 +232,8 @@ def _build_user_prompt(policy: StructuredPolicy, channel_ids: list[str]) -> str:
         "  - For the scenario trigger itself (a variable with no historical data) "
         "use a short snake_case name and the system will treat the edge as first link.\n"
         "  - Proxy variables in confounders must also follow these rules.\n\n"
-        "Propose 3 to 5 hypotheses. Each must reference a channel_id from the list, "
+        "Propose 5 to 8 hypotheses (prefer the upper end, we prune weak ones downstream). "
+        "Each must reference a channel_id from the list, "
         "specify a distinct perspective from your diversity mandate, name 2 to 6 "
         "historical episodes drawn from the event catalog or well documented events, "
         "and list at least 2 confounders with proxy variables.\n"
@@ -349,7 +350,7 @@ def run_specialist(
         model=model,
         run_id=run_id,
         caller=f"specialist:{specialist_id}",
-        max_tokens=6000,
+        max_tokens=10000,
     )
 
     results: list[Hypothesis] = []
@@ -407,7 +408,7 @@ async def run_specialist_async(
         model=model,
         run_id=run_id,
         caller=f"specialist:{specialist_id}",
-        max_tokens=6000,
+        max_tokens=10000,
     )
 
     results: list[Hypothesis] = []

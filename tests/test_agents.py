@@ -93,7 +93,8 @@ def run() -> None:
 
     # 5. Adversary
     print("\n[4/4] running adversary (hypothesis review + per analog critique)...")
-    enriched = adversarial_review(hyps, policy_context=policy.raw_input, run_id=run_id)
+    enriched, rejected = adversarial_review(hyps, policy_context=policy.raw_input, run_id=run_id)
+    print(f"  adversary rejected {len(rejected)} hypotheses outright")
 
     # Check added confounders
     added_count = 0

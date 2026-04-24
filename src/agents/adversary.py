@@ -25,19 +25,36 @@ from src.schemas import Confounder, Hypothesis
 from ._client import call_tool, call_tool_async
 
 
-HYPOTHESIS_REVIEW_SYSTEM = """You are the adversarial reviewer. Your job is to
-strengthen hypotheses by identifying the strongest alternative explanations
-that could confound the result.
+HYPOTHESIS_REVIEW_SYSTEM = """You are the adversarial reviewer. Your job is
+TWO things:
 
-For each hypothesis you receive, return additional confounders that are not
-already listed. These confounders should be:
+1. Strengthen salvageable hypotheses by identifying the strongest alternative
+   explanations that could confound the result. Return additional confounders
+   that are not already listed, each with a named proxy_variable.
+
+2. KILL fundamentally broken hypotheses by including them in the
+   rejected list with a specific reason. Reject when:
+   - The claimed shock has no chance of identifying the response (e.g.,
+     reverse causality dominates and cannot be proxied).
+   - The claimed historical analogs span incompatible regimes and no
+     subset is usable.
+   - The economic mechanism as stated contradicts basic accounting
+     identities or well established priors.
+   - The response variable is not causally downstream of the shock on
+     any plausible transmission path.
+
+Do NOT reject merely because a hypothesis is imperfect. Everything has
+confounders. Reject only when the hypothesis is not salvageable.
+
+Confounders should be:
   - Specific and proxyable (include a proxy_variable name)
   - Not generic. "Omitted variable bias" is not acceptable.
   - Drawn from the standard critiques: Lucas critique for regime changes,
     simultaneity, reverse causality, sample selection, omitted third driver,
     pegged vs floating regime differences.
 
-Return exactly ONE tool call with added_confounders keyed by hypothesis_id.
+Return ONE tool call with both added_confounders (keyed by hypothesis_id)
+and rejected (a list). Most hypotheses should have an empty rejected entry.
 """
 
 
@@ -90,6 +107,18 @@ HYPOTHESIS_REVIEW_TOOL: dict[str, Any] = {
                     },
                     "required": ["name", "mechanism", "proxy_variable", "handling"],
                 },
+            },
+        },
+        "rejected": {
+            "type": "array",
+            "description": "Hypotheses that cannot be salvaged. Usually empty.",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "hypothesis_id": {"type": "string"},
+                    "reason": {"type": "string"},
+                },
+                "required": ["hypothesis_id", "reason"],
             },
         },
     },
@@ -214,40 +243,10 @@ def adversarial_review(
     hypotheses: list[Hypothesis],
     policy_context: str = "",
     run_id: Optional[str] = None,
-) -> list[Hypothesis]:
-    """Run both adversarial passes and return enriched hypotheses.
-
-    Merges added confounders and attaches per episode critiques.
-    """
-    if not hypotheses:
-        return []
-
-    added = _review_hypotheses(hypotheses, run_id=run_id)
-    analog = _review_analogs(hypotheses, policy_context=policy_context, run_id=run_id)
-
-    enriched: list[Hypothesis] = []
-    for h in hypotheses:
-        # Deep copy via model_dump / rebuild so we can mutate safely
-        data = h.model_dump()
-
-        # Add confounders
-        existing_names = {c["name"] for c in data["confounders"]}
-        for new_c in added.get(h.hypothesis_id, []):
-            if new_c.name not in existing_names:
-                data["confounders"].append(new_c.model_dump())
-                existing_names.add(new_c.name)
-
-        # Attach analog critiques
-        critique_map = analog.get(h.hypothesis_id, {})
-        # Match by episode name, tolerant of whitespace and case
-        normalized = {k.strip().lower(): v for k, v in critique_map.items()}
-        for ep in data["historical_episodes"]:
-            key = str(ep["name"]).strip().lower()
-            if key in normalized:
-                ep["adversarial_critique"] = normalized[key]
-
-        enriched.append(Hypothesis.model_validate(data))
-    return enriched
+) -> tuple[list[Hypothesis], dict[str, str]]:
+    """Sync wrapper. Returns (enriched_hypotheses, rejected_map)."""
+    import asyncio
+    return asyncio.run(adversarial_review_async(hypotheses, policy_context, run_id))
 
 
 # ---------------------------------------------------------------------------
@@ -257,9 +256,10 @@ def adversarial_review(
 async def _review_one_hypothesis(
     h: Hypothesis,
     run_id: Optional[str] = None,
-) -> tuple[str, list[Confounder]]:
+) -> tuple[str, list[Confounder], Optional[str]]:
     """Adversarial confounder review for a SINGLE hypothesis.
 
+    Returns (hypothesis_id, added_confounders, rejection_reason_or_None).
     Per hypothesis calls keep the output bounded so we never hit max_tokens.
     """
     serialized = _serialize_hypotheses_for_review([h])
@@ -268,11 +268,14 @@ async def _review_one_hypothesis(
             system=HYPOTHESIS_REVIEW_SYSTEM,
             cacheable_context=None,
             user=(
-                "Review this hypothesis and add 2 to 4 confounders not already listed. "
-                "Do not duplicate existing ones.\n\n" + serialized
+                "Review this hypothesis. EITHER add 2 to 4 confounders not already "
+                "listed, OR reject it if it is fundamentally unsalvageable. Most "
+                "hypotheses should be kept with added confounders; only reject when "
+                "no fix would rescue the test.\n\n" + serialized
             ),
             tool_name="submit_additional_confounders",
-            tool_description="Return additional confounders keyed by hypothesis_id.",
+            tool_description="Return additional confounders keyed by hypothesis_id, "
+                             "plus any hypotheses to reject.",
             tool_schema=HYPOTHESIS_REVIEW_TOOL,
             run_id=run_id,
             caller=f"adversary:hypothesis:{h.hypothesis_id}",
@@ -280,11 +283,10 @@ async def _review_one_hypothesis(
         )
     except Exception as exc:
         print(f"  [adversary hypothesis {h.hypothesis_id}] FAILED: {type(exc).__name__}")
-        return h.hypothesis_id, []
+        return h.hypothesis_id, [], None
 
     confounders: list[Confounder] = []
     items = (data.get("added_confounders") or {}).get(h.hypothesis_id, [])
-    # Fallback: if LLM keyed by something else, take the first value list
     if not items and data.get("added_confounders"):
         for v in data["added_confounders"].values():
             if isinstance(v, list):
@@ -301,7 +303,16 @@ async def _review_one_hypothesis(
             ))
         except Exception:
             continue
-    return h.hypothesis_id, confounders
+
+    # Rejection pass
+    rejection_reason: Optional[str] = None
+    for rej in data.get("rejected") or []:
+        hid = rej.get("hypothesis_id") or ""
+        if hid == h.hypothesis_id or hid in ("", "this", "self"):
+            rejection_reason = rej.get("reason", "rejected by adversary")
+            break
+
+    return h.hypothesis_id, confounders, rejection_reason
 
 
 async def _review_analogs_one_hypothesis(
@@ -356,15 +367,18 @@ async def adversarial_review_async(
     hypotheses: list[Hypothesis],
     policy_context: str = "",
     run_id: Optional[str] = None,
-) -> list[Hypothesis]:
+) -> tuple[list[Hypothesis], dict[str, str]]:
     """Per hypothesis parallel adversarial review.
 
-    Splits the work so each call stays under a safe max_tokens threshold.
-    For N hypotheses, issues 2*N LLM calls in parallel.
+    Returns (enriched_hypotheses, rejected_map) where rejected_map is
+    hypothesis_id -> rejection reason. Rejected hypotheses are STILL
+    returned in the enriched list (with their critiques attached) so
+    they remain auditable, and the orchestrator filters them out via
+    the rejected_map before running empirics.
     """
     import asyncio
     if not hypotheses:
-        return []
+        return [], {}
 
     hyp_tasks = [_review_one_hypothesis(h, run_id=run_id) for h in hypotheses]
     analog_tasks = [_review_analogs_one_hypothesis(h, policy_context=policy_context, run_id=run_id)
@@ -375,7 +389,10 @@ async def adversarial_review_async(
     hyp_results = results[:n]
     analog_results = results[n:]
 
-    added: dict[str, list[Confounder]] = dict(hyp_results)
+    added: dict[str, list[Confounder]] = {hid: conf for hid, conf, _ in hyp_results}
+    rejected: dict[str, str] = {
+        hid: reason for hid, _, reason in hyp_results if reason is not None
+    }
     analog: dict[str, dict[str, str]] = dict(analog_results)
 
     enriched: list[Hypothesis] = []
@@ -389,7 +406,7 @@ async def adversarial_review_async(
         critique_map = analog.get(h.hypothesis_id, {})
         _attach_critiques_fuzzy(data["historical_episodes"], critique_map)
         enriched.append(Hypothesis.model_validate(data))
-    return enriched
+    return enriched, rejected
 
 
 def _attach_critiques_fuzzy(episodes: list[dict], critique_map: dict[str, str]) -> None:

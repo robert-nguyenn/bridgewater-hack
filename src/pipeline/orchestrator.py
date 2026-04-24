@@ -40,6 +40,7 @@ from src.empirics.analog_retrieval import retrieve_analogs
 from src.empirics.router import estimate_hypothesis
 from src.graph.builder import build_graph
 from src.loaders import get_data
+from src.pipeline.pruner import prune_edges
 from src.schemas import Hypothesis, ImpactMap, StructuredPolicy
 
 
@@ -121,7 +122,9 @@ async def run_impact_analysis_async(
 
     # -------- Step 4: adversary in parallel --------
     t0 = time.time()
-    enriched = await adversarial_review_async(all_hyps, policy_context=policy.raw_input, run_id=run_id)
+    enriched, rejected_map = await adversarial_review_async(
+        all_hyps, policy_context=policy.raw_input, run_id=run_id
+    )
     n_critiques = sum(
         1 for h in enriched for ep in h.historical_episodes
         if ep.adversarial_critique and len(ep.adversarial_critique.strip()) > 10
@@ -130,10 +133,21 @@ async def run_impact_analysis_async(
     _step(run_id, "adversary",
           elapsed_s=round(time.time() - t0, 1),
           per_analog_critiques=f"{n_critiques}/{n_total_eps}",
+          n_rejected=len(rejected_map),
           new_confounders_total=sum(len(h.confounders) for h in enriched) -
                                  sum(len(h.confounders) for h in all_hyps))
     _save_intermediate(run_id, "hypotheses_enriched", enriched)
+    if rejected_map:
+        _save_intermediate(run_id, "hypotheses_rejected", rejected_map)
 
+    # Filter rejected hypotheses BEFORE empirics so we don't waste estimator
+    # and plot cycles on them. Rejected still live in hypotheses_enriched.json
+    # and hypotheses_rejected.json for audit.
+    surviving = [h for h in enriched if h.hypothesis_id not in rejected_map]
+    if len(surviving) != len(enriched):
+        _step(run_id, "adversary_filter",
+              survived=len(surviving), rejected=len(enriched) - len(surviving))
+    enriched = surviving
     hypotheses_by_id = {h.hypothesis_id: h for h in enriched}
 
     # -------- Step 5: empirics router (deterministic, off the event loop) --------
@@ -193,6 +207,20 @@ async def run_impact_analysis_async(
         _step(run_id, "reviewer",
               elapsed_s=round(time.time() - t0, 1),
               total_flags=len(review_flags), errors=errors, warnings=warnings)
+
+    # -------- Step 8.5: prune dead and duplicate edges --------
+    t0 = time.time()
+    pre_prune_count = len(edges)
+    edges, prune_log = prune_edges(
+        edges,
+        review_flags=review_flags,
+        rejected_hypothesis_ids=set(rejected_map.keys()),
+    )
+    _save_intermediate(run_id, "pruned_edges", prune_log)
+    _step(run_id, "pruner",
+          elapsed_s=round(time.time() - t0, 1),
+          pruned=pre_prune_count - len(edges),
+          kept=len(edges))
 
     # -------- Step 9: analog retrieval at the scenario level --------
     t0 = time.time()

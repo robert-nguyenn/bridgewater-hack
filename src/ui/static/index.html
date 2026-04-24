@@ -480,10 +480,15 @@ function renderOverviewDrawer(impact) {
     <div class="row"><span class="k">review warnings</span><span class="v">${warns.length}</span></div>
     <div class="row"><span class="k">elapsed</span><span class="v">${meta.elapsed_total_s || "-"}s</span></div>
     <h3 style="margin-top:20px;">analogs</h3>
-    ${(impact.historical_analogs || []).slice(0,5).map(a => `
-      <div class="caveat"><strong>${a.event_name || a.event_date}</strong> <span style="color:var(--muted);">sim=${(a.similarity||0).toFixed(2)}</span><br>
-        30d: ${fmtPct(a.response_30d_pct)} · 90d: ${fmtPct(a.response_90d_pct)}</div>
-    `).join("")}
+    ${(impact.historical_analogs || []).slice(0,5).map(a => {
+      const b = a.similarity_breakdown || {};
+      const brk = (b.text !== undefined)
+        ? `<span style="color:var(--muted);font-size:10px;">text=${b.text.toFixed(2)} · type=${b.type_match.toFixed(2)} · mag=${b.magnitude.toFixed(2)}</span>`
+        : "";
+      return `<div class="caveat"><strong>${a.event_name || a.event_date}</strong>
+        <span style="color:var(--muted);">sim=${(a.similarity||0).toFixed(2)}</span> ${brk}<br>
+        ${a.event_date} · 30d: ${fmtPct(a.response_30d_pct)} · 90d: ${fmtPct(a.response_90d_pct)}</div>`;
+    }).join("")}
     <h3 style="margin-top:20px;">all review flags</h3>
     ${flags.map(f => `<div class="flag ${f.severity}"><span class="cat">${f.severity} · ${f.category}</span><br>${escapeHtml(f.message)}</div>`).join("")}
   `;
