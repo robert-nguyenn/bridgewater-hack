@@ -9,6 +9,8 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 
+data/
+
 # Node
 node_modules/
 dist/
