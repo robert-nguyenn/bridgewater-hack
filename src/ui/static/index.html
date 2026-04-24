@@ -1,0 +1,517 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Impact Mapper</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
+<style>
+  :root {
+    --bg: #0b0d10;
+    --bg-2: #111418;
+    --panel: #161b20;
+    --border: #232a30;
+    --text: #d8dde4;
+    --muted: #7a858f;
+    --accent: #d4a64a;
+    --pos: #4fb47a;
+    --neg: #d35d5d;
+    --amb: #7a858f;
+    --first: #c879e3;
+    --err: #e86a6a;
+    --warn: #d4a64a;
+    --info: #6ea5c9;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; height: 100%;
+    background: var(--bg); color: var(--text);
+    font-family: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+    font-size: 13px;
+  }
+  header {
+    padding: 12px 20px; border-bottom: 1px solid var(--border);
+    background: var(--bg-2); display: flex; align-items: center; gap: 16px;
+  }
+  header .title { font-weight: 600; letter-spacing: 0.5px; }
+  header .title span { color: var(--accent); }
+  header .meta { color: var(--muted); font-size: 11px; }
+  main { display: grid; grid-template-columns: 360px 1fr 380px; height: calc(100vh - 50px); }
+  .left, .right {
+    border-right: 1px solid var(--border);
+    overflow-y: auto; background: var(--panel);
+  }
+  .right { border-right: none; border-left: 1px solid var(--border); }
+  .center { position: relative; overflow: hidden; background: var(--bg); }
+
+  .pane { padding: 14px 16px; border-bottom: 1px solid var(--border); }
+  .pane h3 { margin: 0 0 8px 0; font-size: 11px; letter-spacing: 1px;
+             text-transform: uppercase; color: var(--muted); font-weight: 600; }
+  .pane small { color: var(--muted); font-size: 11px; }
+
+  textarea, input {
+    width: 100%; background: var(--bg); color: var(--text);
+    border: 1px solid var(--border); border-radius: 3px;
+    padding: 8px; font-family: inherit; font-size: 12px; resize: vertical;
+  }
+  textarea { min-height: 90px; }
+  button {
+    background: var(--accent); color: #000; border: none; padding: 7px 14px;
+    font-family: inherit; font-weight: 600; cursor: pointer; font-size: 12px;
+    border-radius: 3px;
+  }
+  button:hover { filter: brightness(1.1); }
+  button:disabled { background: var(--border); color: var(--muted); cursor: wait; }
+
+  .steps { list-style: none; margin: 0; padding: 0; font-size: 11px; }
+  .steps li { padding: 3px 0; color: var(--muted); }
+  .steps li.active { color: var(--accent); }
+  .steps li.done { color: var(--pos); }
+
+  .run-list { list-style: none; margin: 0; padding: 0; font-size: 11px; }
+  .run-list li { padding: 6px 0; border-bottom: 1px dotted var(--border); cursor: pointer; }
+  .run-list li:hover { color: var(--accent); }
+  .run-list .rid { color: var(--muted); font-size: 10px; }
+
+  svg { width: 100%; height: 100%; display: block; }
+  .node circle { stroke: var(--border); stroke-width: 1.2; }
+  .node text { fill: var(--text); font-size: 10px; pointer-events: none; }
+  .node.is-scenario circle { fill: var(--accent); stroke: #fff; stroke-width: 2; }
+
+  .link { fill: none; cursor: pointer; }
+  .link.first { stroke-dasharray: 6 4; }
+  .link-label {
+    font-size: 9px; fill: var(--muted); pointer-events: none;
+  }
+  .link:hover { stroke-width: 5 !important; }
+
+  .wave-header text { fill: var(--muted); font-size: 10px;
+                      text-transform: uppercase; letter-spacing: 1px; }
+
+  .drawer { padding: 14px 16px; }
+  .drawer h2 { margin: 0 0 2px 0; font-size: 13px; }
+  .drawer .sub { color: var(--muted); font-size: 11px; margin-bottom: 12px; }
+  .row { display: flex; justify-content: space-between; gap: 10px;
+         padding: 4px 0; border-bottom: 1px dotted var(--border); font-size: 11px; }
+  .row .k { color: var(--muted); }
+  .row .v { color: var(--text); font-variant-numeric: tabular-nums; }
+  .row .v.pos { color: var(--pos); }
+  .row .v.neg { color: var(--neg); }
+
+  .caveat {
+    font-size: 11px; color: var(--text); line-height: 1.45; padding: 6px 0;
+    border-bottom: 1px dotted var(--border);
+  }
+  .caveat::before { content: "▸ "; color: var(--accent); }
+
+  .flag { font-size: 11px; padding: 6px 8px; margin: 4px 0; border-radius: 3px;
+          border-left: 3px solid var(--muted); background: var(--bg); }
+  .flag.error { border-left-color: var(--err); }
+  .flag.warning { border-left-color: var(--warn); }
+  .flag.info { border-left-color: var(--info); }
+  .flag .cat { font-weight: 600; color: var(--accent); font-size: 10px;
+               text-transform: uppercase; letter-spacing: 0.5px; }
+
+  .plot { margin: 10px 0; }
+  .plot img { width: 100%; border: 1px solid var(--border); background: white; }
+  .plot .cap { font-size: 10px; color: var(--muted); margin-top: 2px; }
+
+  .badge { display: inline-block; padding: 2px 6px; border-radius: 2px;
+           font-size: 10px; color: #000; font-weight: 600;
+           background: var(--accent); margin-left: 6px; }
+  .badge.first { background: var(--first); color: #fff; }
+
+  .loading { position: absolute; inset: 0; background: rgba(11,13,16,0.85);
+             display: flex; align-items: center; justify-content: center;
+             flex-direction: column; gap: 10px; z-index: 10; }
+  .spinner { width: 28px; height: 28px; border: 3px solid var(--border);
+             border-top-color: var(--accent); border-radius: 50%;
+             animation: spin 0.9s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<header>
+  <div class="title">impact<span>&nbsp;mapper</span></div>
+  <div class="meta" id="status-meta">idle</div>
+</header>
+<main>
+  <aside class="left">
+    <div class="pane">
+      <h3>Scenario</h3>
+      <textarea id="scenario" placeholder="e.g. Fed cuts 50bp at the next meeting. OR: Strait of Hormuz closed for 7+ days with >50% probability over 30 days."></textarea>
+      <div style="margin-top:8px; display:flex; gap:8px; align-items:center;">
+        <button id="run-btn">Run analysis</button>
+        <small id="time-note"></small>
+      </div>
+    </div>
+    <div class="pane">
+      <h3>Pipeline</h3>
+      <ul class="steps" id="steps"></ul>
+    </div>
+    <div class="pane">
+      <h3>Recent runs</h3>
+      <ul class="run-list" id="runs"></ul>
+    </div>
+  </aside>
+
+  <section class="center">
+    <div id="loading" class="loading" style="display:none;">
+      <div class="spinner"></div>
+      <div id="loading-text">starting...</div>
+    </div>
+    <svg id="graph"></svg>
+  </section>
+
+  <aside class="right">
+    <div id="drawer" class="drawer">
+      <div class="sub">Click any edge or node to see details. First-link edges (dashed) are LLM / analog reasoning, not regression estimated.</div>
+    </div>
+  </aside>
+</main>
+
+<script>
+const API = "";
+const ScenarioEl = document.getElementById("scenario");
+const RunBtn = document.getElementById("run-btn");
+const StepsEl = document.getElementById("steps");
+const RunsEl = document.getElementById("runs");
+const StatusMetaEl = document.getElementById("status-meta");
+const DrawerEl = document.getElementById("drawer");
+const LoadingEl = document.getElementById("loading");
+const LoadingTextEl = document.getElementById("loading-text");
+const SVG = d3.select("#graph");
+
+let currentRunId = null;
+let currentMap = null;
+let pollTimer = null;
+
+async function fetchJson(url, opts) {
+  const r = await fetch(url, opts);
+  if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+  return r.json();
+}
+
+async function loadRuns() {
+  try {
+    const { runs } = await fetchJson("/api/runs");
+    RunsEl.innerHTML = "";
+    runs.filter(r => r.has_impact_map).slice(0, 15).forEach(r => {
+      const li = document.createElement("li");
+      li.innerHTML = `<div>${r.subject || "(no subject)"}</div><div class="rid">${r.run_id}</div>`;
+      li.onclick = () => loadRun(r.run_id);
+      RunsEl.appendChild(li);
+    });
+    if (!RunsEl.children.length) RunsEl.innerHTML = "<small>no past runs</small>";
+  } catch (e) { console.error(e); }
+}
+
+async function loadRun(runId) {
+  currentRunId = runId;
+  StatusMetaEl.textContent = `run ${runId}`;
+  try {
+    const data = await fetchJson(`/api/runs/${runId}`);
+    renderSteps(data.steps || []);
+    if (data.impact_map) {
+      currentMap = data.impact_map;
+      renderGraph(currentMap);
+      renderOverviewDrawer(currentMap);
+    }
+  } catch (e) {
+    alert("load failed: " + e.message);
+  }
+}
+
+function renderSteps(steps) {
+  StepsEl.innerHTML = "";
+  const names = ["policy_parser","coordinator","specialists_parallel",
+                 "adversary","empirics","graph_builder","synthesizer",
+                 "reviewer","analog_retrieval","done"];
+  const seen = {};
+  steps.forEach(s => { seen[s.step] = s; });
+  names.forEach(n => {
+    const li = document.createElement("li");
+    const s = seen[n];
+    if (s) {
+      li.classList.add("done");
+      const bits = [n];
+      if (s.elapsed_s !== undefined) bits.push(`${s.elapsed_s}s`);
+      if (s.n_hypotheses) bits.push(`${s.n_hypotheses} hyps`);
+      if (s.n_edges) bits.push(`${s.n_edges} edges`);
+      if (s.n_plots) bits.push(`${s.n_plots} plots`);
+      if (s.per_analog_critiques) bits.push(`analogs ${s.per_analog_critiques}`);
+      if (s.total_flags !== undefined) bits.push(`${s.total_flags} flags (${s.errors}err)`);
+      li.textContent = "✓ " + bits.join(" · ");
+    } else {
+      li.textContent = "· " + n;
+    }
+    StepsEl.appendChild(li);
+  });
+}
+
+async function startRun() {
+  const policy = ScenarioEl.value.trim();
+  if (!policy) { alert("enter a scenario"); return; }
+  RunBtn.disabled = true;
+  LoadingEl.style.display = "flex";
+  LoadingTextEl.textContent = "queuing...";
+  DrawerEl.innerHTML = '<div class="sub">running...</div>';
+
+  try {
+    const { run_id } = await fetchJson("/api/analyze", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({policy}),
+    });
+    currentRunId = run_id;
+    StatusMetaEl.textContent = `run ${run_id} (live)`;
+    pollStatus();
+  } catch (e) {
+    alert("failed to start: " + e.message);
+    RunBtn.disabled = false;
+    LoadingEl.style.display = "none";
+  }
+}
+
+function pollStatus() {
+  if (pollTimer) clearInterval(pollTimer);
+  const t0 = Date.now();
+  pollTimer = setInterval(async () => {
+    try {
+      const data = await fetchJson(`/api/runs/${currentRunId}`);
+      renderSteps(data.steps || []);
+      const lastStep = (data.steps || []).slice(-1)[0];
+      const secs = Math.round((Date.now() - t0) / 1000);
+      LoadingTextEl.textContent =
+        (lastStep ? `${lastStep.step}` : "starting") + ` · ${secs}s`;
+
+      const state = data.status?.state;
+      if (state === "done" && data.impact_map) {
+        clearInterval(pollTimer);
+        currentMap = data.impact_map;
+        renderGraph(currentMap);
+        renderOverviewDrawer(currentMap);
+        LoadingEl.style.display = "none";
+        RunBtn.disabled = false;
+        loadRuns();
+      } else if (state === "failed") {
+        clearInterval(pollTimer);
+        LoadingEl.style.display = "none";
+        RunBtn.disabled = false;
+        alert("run failed: " + (data.status.error || "unknown"));
+      }
+    } catch (e) {
+      console.error("poll error", e);
+    }
+  }, 2000);
+}
+
+// ===== Graph rendering (wave-based horizontal layout) =====
+
+function renderGraph(impact) {
+  SVG.selectAll("*").remove();
+
+  const bbox = SVG.node().getBoundingClientRect();
+  const W = bbox.width, H = bbox.height;
+
+  // Build wave columns. The "scenario" root node is virtual, positioned in col 0.
+  const scenarioSubject = impact.policy.subject;
+  const maxWave = Math.max(1, ...impact.edges.map(e => e.wave));
+  const waveCount = maxWave + 1;         // 0 is the scenario column
+  const colW = W / (waveCount + 1);
+
+  // Assign nodes to columns
+  const nodeById = new Map();
+  impact.nodes.forEach(n => nodeById.set(n.node_id, { ...n, col: Math.max(1, n.wave) }));
+
+  // Scenario root
+  const scenarioNodeId = "__scenario__";
+  const scenarioNode = {
+    node_id: scenarioNodeId,
+    label: impact.policy.subject || "scenario",
+    variable_type: "scenario",
+    wave: 0, col: 0, is_scenario: true,
+  };
+  nodeById.set(scenarioNodeId, scenarioNode);
+
+  // Rewire first-link edges to originate at scenario root for clearer layout
+  const edges = impact.edges.map(e => ({
+    ...e,
+    source_id: e.is_first_link ? scenarioNodeId : e.source_node,
+    target_id: e.target_node,
+  }));
+
+  // Stack nodes vertically within each column
+  const byCol = d3.group(Array.from(nodeById.values()), n => n.col);
+  byCol.forEach((list, col) => {
+    list.forEach((n, i) => {
+      n.x = colW * (col + 1);
+      n.y = (H / (list.length + 1)) * (i + 1);
+    });
+  });
+
+  // Wave headers
+  const headerY = 20;
+  const headers = SVG.append("g").attr("class", "wave-header");
+  for (let c = 0; c <= maxWave; c++) {
+    const label = c === 0 ? "scenario" : `wave ${c}`;
+    headers.append("text").attr("x", colW * (c + 1)).attr("y", headerY)
+      .attr("text-anchor", "middle").text(label);
+  }
+
+  // Edges
+  const linkColor = (e) => {
+    if (!e.elasticity || e.elasticity.point === 0) return "var(--amb)";
+    return e.elasticity.point > 0 ? "var(--pos)" : "var(--neg)";
+  };
+  const linkWidth = (e) => {
+    const abs = Math.min(Math.abs((e.elasticity?.point || 0)), 2);
+    return 1 + 3 * Math.sqrt(abs);
+  };
+  const linkOpacity = (e) => 0.3 + 0.7 * (e.confidence?.overall || 0);
+
+  const linkGroup = SVG.append("g").attr("class", "links");
+  linkGroup.selectAll("path").data(edges).join("path")
+    .attr("class", e => "link" + (e.is_first_link ? " first" : ""))
+    .attr("stroke", linkColor)
+    .attr("stroke-width", linkWidth)
+    .attr("stroke-opacity", linkOpacity)
+    .attr("d", e => curve(nodeById.get(e.source_id), nodeById.get(e.target_id)))
+    .on("click", (ev, e) => renderEdgeDrawer(e))
+    .append("title").text(e => `${e.source_node} -> ${e.target_node}  β=${e.elasticity?.point?.toFixed(3)}  conf=${e.confidence?.overall?.toFixed(2)}`);
+
+  // Nodes
+  const nodeGroup = SVG.append("g").attr("class", "nodes");
+  const nodeSel = nodeGroup.selectAll("g").data(Array.from(nodeById.values())).join("g")
+    .attr("class", n => "node" + (n.is_scenario ? " is-scenario" : ""))
+    .attr("transform", n => `translate(${n.x},${n.y})`)
+    .on("click", (ev, n) => renderNodeDrawer(n));
+
+  nodeSel.append("circle").attr("r", n => n.is_scenario ? 12 : 8)
+    .attr("fill", n => n.is_scenario ? "var(--accent)" : "var(--bg-2)");
+  nodeSel.append("text").attr("dx", 14).attr("dy", 4)
+    .text(n => truncate(n.label, 22));
+}
+
+function curve(a, b) {
+  if (!a || !b) return "";
+  const mx = (a.x + b.x) / 2;
+  return `M${a.x},${a.y} C${mx},${a.y} ${mx},${b.y} ${b.x},${b.y}`;
+}
+
+function truncate(s, n) {
+  s = String(s);
+  return s.length > n ? s.slice(0, n-1) + "…" : s;
+}
+
+// ===== Drawers =====
+
+function renderOverviewDrawer(impact) {
+  const meta = impact.generation_metadata || {};
+  const flags = impact.review_flags || [];
+  const errors = flags.filter(f => f.severity === "error");
+  const warns = flags.filter(f => f.severity === "warning");
+  DrawerEl.innerHTML = `
+    <h2>${impact.policy.subject}</h2>
+    <div class="sub">${impact.policy.policy_type} · ${impact.policy.magnitude} ${impact.policy.magnitude_unit} · horizon ${impact.policy.horizon_days}d</div>
+    <div class="row"><span class="k">edges</span><span class="v">${impact.edges.length}</span></div>
+    <div class="row"><span class="k">first link</span><span class="v">${impact.edges.filter(e => e.is_first_link).length}</span></div>
+    <div class="row"><span class="k">plots</span><span class="v">${impact.edges.reduce((a,e) => a + (e.method_estimates||[]).filter(m => m.plot_path).length, 0)}</span></div>
+    <div class="row"><span class="k">review errors</span><span class="v neg">${errors.length}</span></div>
+    <div class="row"><span class="k">review warnings</span><span class="v">${warns.length}</span></div>
+    <div class="row"><span class="k">elapsed</span><span class="v">${meta.elapsed_total_s || "-"}s</span></div>
+    <h3 style="margin-top:20px;">analogs</h3>
+    ${(impact.historical_analogs || []).slice(0,5).map(a => `
+      <div class="caveat"><strong>${a.event_name || a.event_date}</strong> <span style="color:var(--muted);">sim=${(a.similarity||0).toFixed(2)}</span><br>
+        30d: ${fmtPct(a.response_30d_pct)} · 90d: ${fmtPct(a.response_90d_pct)}</div>
+    `).join("")}
+    <h3 style="margin-top:20px;">all review flags</h3>
+    ${flags.map(f => `<div class="flag ${f.severity}"><span class="cat">${f.severity} · ${f.category}</span><br>${escapeHtml(f.message)}</div>`).join("")}
+  `;
+}
+
+function renderEdgeDrawer(edge) {
+  const r = edge.elasticity || {};
+  const c = edge.confidence || {};
+  const flags = (currentMap.review_flags || []).filter(
+    f => f.target === `${edge.source_node}->${edge.target_node}`
+  );
+  const methodsHtml = (edge.method_estimates || []).map(m => `
+    <div class="plot">
+      <div class="row"><span class="k">${m.method}</span>
+        <span class="v ${m.passed ? '' : 'neg'}">${m.passed ? 'OK' : 'failed'}</span></div>
+      ${m.coefficient !== null && m.coefficient !== undefined ? `
+        <div class="row"><span class="k">coef</span><span class="v ${m.coefficient > 0 ? 'pos':'neg'}">${m.coefficient.toFixed(4)}</span></div>
+      ` : ''}
+      ${m.standard_error ? `<div class="row"><span class="k">SE</span><span class="v">${m.standard_error.toFixed(4)}</span></div>` : ''}
+      ${m.sample_size ? `<div class="row"><span class="k">n</span><span class="v">${m.sample_size}</span></div>` : ''}
+      ${m.r_squared !== null && m.r_squared !== undefined ? `<div class="row"><span class="k">R²</span><span class="v">${m.r_squared.toFixed(3)}</span></div>` : ''}
+      ${m.plot_path ? `<img src="/api/plots/${currentRunId}/${fileName(m.plot_path)}" />` : ''}
+      ${m.notes ? `<div class="cap">${escapeHtml(m.notes)}</div>` : ''}
+    </div>
+  `).join("");
+
+  DrawerEl.innerHTML = `
+    <h2>${edge.source_node} → ${edge.target_node}
+      ${edge.is_first_link ? '<span class="badge first">first link</span>' : ''}
+    </h2>
+    <div class="sub">wave ${edge.wave} · lag ${edge.lag_days}d</div>
+    <div class="row"><span class="k">elasticity</span>
+      <span class="v ${r.point > 0 ? 'pos' : r.point < 0 ? 'neg' : ''}">${r.point?.toFixed(4)} [${r.low?.toFixed(4)}, ${r.high?.toFixed(4)}] ${r.unit}</span></div>
+    <div class="row"><span class="k">confidence</span><span class="v">${(c.overall||0).toFixed(2)}</span></div>
+    <div class="row"><span class="k">  statistical</span><span class="v">${(c.statistical||0).toFixed(2)}</span></div>
+    <div class="row"><span class="k">  sample</span><span class="v">${(c.sample||0).toFixed(2)}</span></div>
+    <div class="row"><span class="k">  cross-method</span><span class="v">${(c.cross_method||0).toFixed(2)}</span></div>
+    <div class="row"><span class="k">  regime</span><span class="v">${(c.regime||0).toFixed(2)}</span></div>
+
+    ${flags.length ? `<h3 style="margin-top:16px;">review flags</h3>
+      ${flags.map(f => `<div class="flag ${f.severity}"><span class="cat">${f.severity} · ${f.category}</span><br>${escapeHtml(f.message)}</div>`).join("")}` : ''}
+
+    <h3 style="margin-top:16px;">caveats</h3>
+    ${(edge.caveats || []).map(c => `<div class="caveat">${escapeHtml(c)}</div>`).join("") || '<div class="sub">no caveats</div>'}
+
+    <h3 style="margin-top:16px;">method estimates</h3>
+    ${methodsHtml || '<div class="sub">no estimates</div>'}
+
+    <h3 style="margin-top:16px;">confounders tested</h3>
+    ${(edge.confounders_tested || []).map(cf => `
+      <div class="caveat"><strong>${escapeHtml(cf.name)}</strong> (${cf.handling})<br>${escapeHtml(cf.mechanism)}</div>
+    `).join("") || '<div class="sub">none</div>'}
+  `;
+}
+
+function renderNodeDrawer(node) {
+  if (node.is_scenario) {
+    DrawerEl.innerHTML = `<h2>scenario root</h2><div class="sub">trigger node. All first-link edges originate here.</div>`;
+    return;
+  }
+  DrawerEl.innerHTML = `
+    <h2>${node.label}</h2>
+    <div class="sub">${node.node_id}</div>
+    <div class="row"><span class="k">variable type</span><span class="v">${node.variable_type}</span></div>
+    <div class="row"><span class="k">wave</span><span class="v">${node.wave}</span></div>
+    ${node.current_level !== null && node.current_level !== undefined ? `<div class="row"><span class="k">current</span><span class="v">${node.current_level}</span></div>` : ''}
+    ${node.data_source ? `<div class="row"><span class="k">source</span><span class="v">${node.data_source}</span></div>` : ''}
+  `;
+}
+
+function fmtPct(v) {
+  if (v === null || v === undefined) return "n/a";
+  return (v > 0 ? "+" : "") + v.toFixed(1) + "%";
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, ch => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+  }[ch]));
+}
+
+function fileName(path) {
+  return path.split("/").pop();
+}
+
+RunBtn.addEventListener("click", startRun);
+loadRuns();
+</script>
+</body>
+</html>
