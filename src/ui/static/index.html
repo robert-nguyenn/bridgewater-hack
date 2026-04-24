@@ -192,6 +192,62 @@ async function fetchJson(url, opts) {
   return r.json();
 }
 
+// Client-side humanizer used for identifiers that do not come through
+// the backend node list (the scenario root, edge endpoints in drawers).
+// Mirrors the server's src/variable_labels.py for the most common keys.
+const HUMAN_LABELS = {
+  "dff": "Fed funds effective rate", "fedfunds": "Fed funds target rate", "sofr": "SOFR overnight rate",
+  "dgs2": "2-year Treasury yield", "dgs5": "5-year Treasury yield",
+  "dgs10": "10-year Treasury yield", "dgs30": "30-year Treasury yield",
+  "dfii10": "10-year TIPS real yield", "t10yie": "10-year breakeven inflation",
+  "baa10y": "BAA corporate spread over 10Y", "aaa10y": "AAA corporate spread over 10Y",
+  "cpiaucsl": "Headline CPI (all items)", "cpilfesl": "Core CPI (ex food and energy)",
+  "pcepi": "Headline PCE price index", "pcepilfe": "Core PCE price index",
+  "cpiengsl": "CPI energy",
+  "gdp": "US real GDP", "unrate": "US unemployment rate", "payems": "Nonfarm payrolls",
+  "indpro": "Industrial production", "rsxfs": "Retail sales",
+  "wtisplc": "WTI crude oil price", "wti_oil": "WTI crude oil price",
+  "dcoilbrenteu": "Brent crude oil price", "brent_oil": "Brent crude oil price",
+  "gold": "Gold price", "goldamgbd228nlbm": "Gold price (London AM)",
+  "dxy": "US dollar index (broad)", "dtwexbgs": "US dollar index (broad trade-weighted)",
+  "dexchus": "USD / CNY exchange rate", "dexuseu": "USD / EUR exchange rate",
+  "dexjpus": "USD / JPY exchange rate",
+  "vixcls": "VIX (equity volatility)", "vix": "VIX (equity volatility)",
+  "sp500": "S&P 500 index", "eem": "EM equity ETF (EEM)",
+  "hormuz_closure_probability": "Probability of Strait of Hormuz closure",
+  "strait_of_hormuz_closure_probability": "Probability of Strait of Hormuz closure",
+  "strait_of_hormuz_closure": "Strait of Hormuz closure",
+  "supply_disruption_pct_global": "Global oil supply disruption (% of global)",
+  "effective_tariff_rate": "Effective tariff rate",
+  "bcom_energy_index": "Bloomberg commodity energy index",
+};
+const HUMAN_ABBREV = {
+  cpi: "CPI", pce: "PCE", gdp: "GDP", usd: "USD", eur: "EUR", jpy: "JPY",
+  gbp: "GBP", chf: "CHF", cny: "CNY", yoy: "(YoY)", mom: "(MoM)",
+  pmi: "PMI", ism: "ISM", fx: "FX", em: "EM", dm: "DM", vix: "VIX",
+  ecb: "ECB", fed: "Fed", boj: "BoJ", boe: "BoE", opec: "OPEC", spr: "SPR",
+};
+function humanize(id) {
+  if (!id) return "";
+  const key = String(id).trim().toLowerCase();
+  if (HUMAN_LABELS[key]) return HUMAN_LABELS[key];
+  // patterns
+  let m = key.match(/^usd([a-z]{3})(?:=x)?$/);
+  if (m) return `USD / ${m[1].toUpperCase()} exchange rate`;
+  m = key.match(/^([a-z]{3})usd=x$/);
+  if (m) return `${m[1].toUpperCase()} / USD exchange rate`;
+  m = key.match(/^dgs(\d+)$/);
+  if (m) return `${m[1]}-year Treasury yield`;
+  // default: snake to title + expand abbrev
+  return id.split(/[_\-\s\/]+/).map(p => {
+    if (!p) return "";
+    const lo = p.toLowerCase();
+    if (HUMAN_ABBREV[lo]) return HUMAN_ABBREV[lo];
+    if (p === p.toUpperCase() && p.length <= 5) return p;
+    return p[0].toUpperCase() + p.slice(1);
+  }).filter(Boolean).join(" ");
+}
+
 async function loadRuns() {
   try {
     const { runs } = await fetchJson("/api/runs");
@@ -324,11 +380,11 @@ function renderGraph(impact) {
   const nodeById = new Map();
   impact.nodes.forEach(n => nodeById.set(n.node_id, { ...n, col: Math.max(1, n.wave) }));
 
-  // Scenario root
+  // Scenario root. Label is the policy subject humanized, or raw input.
   const scenarioNodeId = "__scenario__";
   const scenarioNode = {
     node_id: scenarioNodeId,
-    label: impact.policy.subject || "scenario",
+    label: humanize(impact.policy.subject) || "Scenario",
     variable_type: "scenario",
     wave: 0, col: 0, is_scenario: true,
   };
@@ -390,7 +446,10 @@ function renderGraph(impact) {
   nodeSel.append("circle").attr("r", n => n.is_scenario ? 12 : 8)
     .attr("fill", n => n.is_scenario ? "var(--accent)" : "var(--bg-2)");
   nodeSel.append("text").attr("dx", 14).attr("dy", 4)
-    .text(n => truncate(n.label, 22));
+    .text(n => truncate(n.label, 32))
+    .append("title").text(n => `${n.label}\n(${n.node_id})`);
+  // Fallback tooltip via SVG title on the whole group for accessibility
+  nodeSel.append("title").text(n => `${n.label}\n(${n.node_id})`);
 }
 
 function curve(a, b) {
@@ -451,11 +510,13 @@ function renderEdgeDrawer(edge) {
     </div>
   `).join("");
 
+  const srcLabel = humanize(edge.source_node);
+  const tgtLabel = humanize(edge.target_node);
   DrawerEl.innerHTML = `
-    <h2>${edge.source_node} → ${edge.target_node}
+    <h2>${escapeHtml(srcLabel)} → ${escapeHtml(tgtLabel)}
       ${edge.is_first_link ? '<span class="badge first">first link</span>' : ''}
     </h2>
-    <div class="sub">wave ${edge.wave} · lag ${edge.lag_days}d</div>
+    <div class="sub">${escapeHtml(edge.source_node)} → ${escapeHtml(edge.target_node)} · wave ${edge.wave} · lag ${edge.lag_days}d</div>
     <div class="row"><span class="k">elasticity</span>
       <span class="v ${r.point > 0 ? 'pos' : r.point < 0 ? 'neg' : ''}">${r.point?.toFixed(4)} [${r.low?.toFixed(4)}, ${r.high?.toFixed(4)}] ${r.unit}</span></div>
     <div class="row"><span class="k">confidence</span><span class="v">${(c.overall||0).toFixed(2)}</span></div>

@@ -29,6 +29,7 @@ from pydantic import BaseModel
 
 from src.agents._client import new_run_id
 from src.pipeline.orchestrator import run_impact_analysis_async
+from src.variable_labels import humanize
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 RUNS_DIR = PROJECT_ROOT / "data" / "runs"
@@ -40,6 +41,19 @@ app = FastAPI(title="bridgewater-hack impact mapper")
 
 # In memory status tracker. Keys are run_ids; values are status dicts.
 _RUN_STATUS: dict[str, dict] = {}
+
+
+def _rehumanize_labels(impact_map: dict) -> None:
+    """Overwrite node labels with natural English on the way out.
+
+    Runs saved before the label dictionary landed have raw FRED codes or
+    snake_case in node.label. Post processing here ensures the UI always
+    renders human readable names regardless of when the run was saved.
+    """
+    for n in impact_map.get("nodes", []) or []:
+        nid = n.get("node_id")
+        if nid:
+            n["label"] = humanize(nid)
 
 
 class AnalyzeRequest(BaseModel):
@@ -107,7 +121,9 @@ def get_run(run_id: str) -> dict:
 
     if impact_file.exists():
         try:
-            out["impact_map"] = json.loads(impact_file.read_text())
+            impact_map = json.loads(impact_file.read_text())
+            _rehumanize_labels(impact_map)
+            out["impact_map"] = impact_map
         except Exception as exc:
             out["impact_map"] = None
             out["impact_map_error"] = str(exc)

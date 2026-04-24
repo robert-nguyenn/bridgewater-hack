@@ -29,6 +29,7 @@ from src.schemas import (
     StructuredPolicy,
     VariableType,
 )
+from src.variable_labels import humanize
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -137,7 +138,7 @@ def build_graph(
     nodes = [
         NodeObject(
             node_id=nid,
-            label=_humanize(nid),
+            label=humanize(nid),
             variable_type=type_hints.get(nid, VariableType.PRICE),
             wave=node_wave.get(nid, 1),
             current_level=None,
@@ -159,5 +160,3 @@ def _infer_variable_types(hypotheses: list[Hypothesis]) -> dict[str, VariableTyp
     return out
 
 
-def _humanize(nid: str) -> str:
-    return nid.replace("_", " ").title()
