@@ -1,0 +1,132 @@
+# Published impulse response functions used as fallback when a channel
+# is best estimated by a structural VAR rather than a reduced form
+# regression. Values are approximate point estimates with 1 SE bands,
+# read from the published IRF figures of the cited paper. Signs, shapes,
+# and peak horizons are the reliable parts. Precise magnitudes depend on
+# sample and identification and should be read as order of magnitude.
+#
+# Teammate task for Thursday: replace each entry with exact values
+# read directly from the source table or supplementary materials.
+
+impulse_responses:
+
+  - shock: fed_funds_100bp_hike
+    response: cpi_yoy
+    unit: percentage_points
+    horizons:
+      - {months: 3,  elasticity:  0.0, low: -0.10, high:  0.10}
+      - {months: 12, elasticity: -0.20, low: -0.40, high:  0.00}
+      - {months: 24, elasticity: -0.50, low: -0.80, high: -0.20}
+      - {months: 36, elasticity: -0.70, low: -1.10, high: -0.30}
+    source: "Romer and Romer 2004 AER, narrative monetary shock series"
+    notes: "Price puzzle small in narrative identification, larger in Choleski VARs"
+
+  - shock: fed_funds_100bp_hike
+    response: industrial_production
+    unit: percent
+    horizons:
+      - {months: 6,  elasticity: -1.0, low: -2.0, high:  0.0}
+      - {months: 12, elasticity: -2.5, low: -4.0, high: -1.0}
+      - {months: 24, elasticity: -3.0, low: -5.0, high: -1.0}
+      - {months: 36, elasticity: -2.0, low: -4.0, high:  0.0}
+    source: "Romer and Romer 2004 AER"
+    notes: "Peak output decline around 2 years out, recovery by 3"
+
+  - shock: fed_funds_100bp_hike
+    response: real_gdp
+    unit: percent
+    horizons:
+      - {months: 6,  elasticity: -0.2, low: -0.5, high:  0.1}
+      - {months: 12, elasticity: -0.5, low: -0.9, high: -0.1}
+      - {months: 24, elasticity: -0.7, low: -1.2, high: -0.2}
+    source: "Christiano Eichenbaum Evans 2005 JPE"
+    notes: "Recursive identification with standard assumptions"
+
+  - shock: govt_spending_1pct_gdp_expansion
+    response: real_gdp
+    unit: multiplier
+    horizons:
+      - {months: 6,  elasticity: 0.40, low: 0.20, high: 0.70}
+      - {months: 12, elasticity: 0.55, low: 0.30, high: 0.85}
+      - {months: 24, elasticity: 0.60, low: 0.30, high: 0.90}
+    source: "Ramey and Zubairy 2018 JPE, defense news shocks, expansion sample"
+    notes: "Multiplier below one in normal times, contra earlier VAR literature"
+
+  - shock: govt_spending_1pct_gdp_slack
+    response: real_gdp
+    unit: multiplier
+    horizons:
+      - {months: 6,  elasticity: 0.80, low: 0.40, high: 1.30}
+      - {months: 12, elasticity: 1.00, low: 0.50, high: 1.60}
+      - {months: 24, elasticity: 1.15, low: 0.60, high: 1.80}
+    source: "Ramey and Zubairy 2018 JPE, slack regime"
+    notes: "State dependent multiplier larger in slack, still below some earlier estimates"
+
+  - shock: tax_cut_1pct_gdp
+    response: real_gdp
+    unit: multiplier
+    horizons:
+      - {months: 12, elasticity: 1.5, low: 0.8, high: 2.5}
+      - {months: 24, elasticity: 2.5, low: 1.2, high: 3.5}
+      - {months: 36, elasticity: 2.3, low: 1.0, high: 3.3}
+    source: "Romer and Romer 2010 AER, narrative tax shocks"
+    notes: "Tax multipliers in Romer Romer exceed spending multipliers, actively debated"
+
+  - shock: oil_supply_shock_1sigma
+    response: real_oil_price
+    unit: percent
+    horizons:
+      - {months: 3,  elasticity: 5.0, low: 2.0, high: 9.0}
+      - {months: 12, elasticity: 3.0, low: 0.0, high: 7.0}
+      - {months: 24, elasticity: 1.0, low: -3.0, high: 5.0}
+    source: "Kilian 2009 AER, sign and exclusion restrictions VAR"
+    notes: "Supply shock smaller and shorter lived than demand shocks in Kilian decomposition"
+
+  - shock: oil_supply_shock_1sigma
+    response: cpi_yoy
+    unit: percentage_points
+    horizons:
+      - {months: 6,  elasticity: 0.05, low: -0.05, high: 0.20}
+      - {months: 12, elasticity: 0.15, low:  0.00, high: 0.35}
+      - {months: 24, elasticity: 0.20, low:  0.00, high: 0.45}
+    source: "Kilian 2009 AER and successors"
+    notes: "Modest pass through from supply shocks to headline CPI"
+
+  - shock: financial_shock_1sigma_ebp
+    response: industrial_production
+    unit: percent
+    horizons:
+      - {months: 6,  elasticity: -0.8, low: -1.5, high: -0.2}
+      - {months: 12, elasticity: -1.5, low: -2.5, high: -0.5}
+      - {months: 24, elasticity: -1.2, low: -2.2, high: -0.2}
+    source: "Gilchrist and Zakrajsek 2012 AER, excess bond premium shock"
+    notes: "EBP is the component of HY spreads not explained by default risk"
+
+  - shock: uncertainty_shock_1sigma_vix
+    response: industrial_production
+    unit: percent
+    horizons:
+      - {months: 3,  elasticity: -0.4, low: -0.8, high: -0.1}
+      - {months: 12, elasticity: -0.6, low: -1.2, high: -0.1}
+      - {months: 24, elasticity: -0.2, low: -0.7, high:  0.3}
+    source: "Bloom 2009 Econometrica, uncertainty shock VAR"
+    notes: "Temporary output hit with recovery by 24 months"
+
+  - shock: ecb_policy_rate_100bp_hike
+    response: ea_gdp
+    unit: percent
+    horizons:
+      - {months: 12, elasticity: -0.4, low: -0.8, high: -0.1}
+      - {months: 24, elasticity: -0.8, low: -1.4, high: -0.3}
+    source: "Jarocinski and Karadi 2020 AEJ-Macro, sign restriction VAR"
+    notes: "Separates policy rate shock from central bank information shock"
+
+  - shock: usd_appreciation_10pct_broad
+    response: us_exports
+    unit: percent
+    horizons:
+      - {months: 6,  elasticity: -1.0, low: -2.0, high:  0.0}
+      - {months: 12, elasticity: -3.0, low: -5.0, high: -1.0}
+      - {months: 24, elasticity: -4.0, low: -7.0, high: -1.0}
+    source: "Ahmed Appendino Ruta 2017 IMF WP, USD pass through to trade flows"
+    notes: "Dominant currency invoicing means effects show up mostly on import side"

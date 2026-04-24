@@ -1,0 +1,438 @@
+# Channel catalog. Hand authored. Each channel is a canonical transmission
+# path with a plausible typical_elasticity drawn from published literature.
+# Cite source in the comment above each block. Ranges are rough 1 SE bands,
+# not precise confidence intervals.
+#
+# wave_hint semantics:
+#   1 = immediate / same day direct response
+#   2 = weeks to months, second order
+#   3 = quarters to years, general equilibrium
+
+channels:
+
+  # Kuttner 2001, Gurkaynak Sack Swanson 2005. FOMC surprises transmit
+  # near one for one to the short end of the Treasury curve.
+  - id: policy_rate_to_2y_yield
+    description: "Fed funds target changes transmit to 2 year Treasury yields"
+    shock_variable_template: "fed_funds_target"
+    shock_type: price
+    response_variable_template: "dgs2"
+    response_type: price
+    typical_elasticity: 0.70
+    typical_elasticity_range: [0.50, 0.90]
+    typical_lag_days: 1
+    default_estimator: event_study
+    default_covariates: ["dxy", "wti_oil", "vix"]
+    common_confounders:
+      - name: "Coincident fiscal announcement"
+        mechanism: "Fiscal news often clusters with Fed decisions, moving yields independently"
+        proxy_variable: "treasury_supply_surprise"
+        handling: include_covariate
+      - name: "Forward guidance"
+        mechanism: "Path surprise distinct from target surprise"
+        proxy_variable: "eurodollar_ed4_change"
+        handling: include_covariate
+    applicable_policy_types: [monetary]
+    wave_hint: 1
+
+  # Kuttner 2001. Term premium mutes long end response relative to 2y.
+  - id: policy_rate_to_10y_yield
+    description: "Fed funds target changes partially transmit to 10 year Treasury yields"
+    shock_variable_template: "fed_funds_target"
+    shock_type: price
+    response_variable_template: "dgs10"
+    response_type: price
+    typical_elasticity: 0.30
+    typical_elasticity_range: [0.15, 0.50]
+    typical_lag_days: 1
+    default_estimator: event_study
+    default_covariates: ["dxy", "wti_oil", "vix", "term_premium_acm"]
+    common_confounders:
+      - name: "Term premium shift"
+        mechanism: "ACM term premium can move independently of policy"
+        proxy_variable: "term_premium_acm_10y"
+        handling: include_covariate
+      - name: "Global long yields"
+        mechanism: "Bund and JGB co move with UST"
+        proxy_variable: "bund_10y_yield"
+        handling: include_covariate
+    applicable_policy_types: [monetary]
+    wave_hint: 1
+
+  # Engel and West 2006, Clarida Gali Gertler 1999. Rate differentials drive
+  # USD through uncovered interest parity, though the correlation is noisy
+  # in sample.
+  - id: policy_rate_to_usd
+    description: "Hawkish rate surprises appreciate the trade weighted dollar"
+    shock_variable_template: "fed_funds_target"
+    shock_type: price
+    response_variable_template: "dxy"
+    response_type: price
+    typical_elasticity: 0.30
+    typical_elasticity_range: [0.10, 0.55]
+    typical_lag_days: 1
+    default_estimator: event_study
+    default_covariates: ["ecb_rate", "boj_rate", "oil_wti"]
+    common_confounders:
+      - name: "Foreign central bank reaction"
+        mechanism: "ECB and BoJ often adjust in response, muting USD move"
+        proxy_variable: "eur_short_rate_surprise"
+        handling: include_covariate
+      - name: "Risk off flight to USD"
+        mechanism: "USD also rallies on pure risk off, confounds policy signal"
+        proxy_variable: "vix_change"
+        handling: include_covariate
+    applicable_policy_types: [monetary]
+    wave_hint: 2
+
+  # Bernanke and Kuttner 2005. A 25bp surprise hike reduces S&P by roughly
+  # 1 percent contemporaneously through discount rate and expected earnings.
+  - id: policy_rate_to_equity
+    description: "Hawkish rate surprises reduce equity index levels"
+    shock_variable_template: "fed_funds_target"
+    shock_type: price
+    response_variable_template: "sp500"
+    response_type: price
+    typical_elasticity: -4.0
+    typical_elasticity_range: [-6.0, -2.0]
+    typical_lag_days: 1
+    default_estimator: event_study
+    default_covariates: ["vix", "dxy", "high_yield_oas"]
+    common_confounders:
+      - name: "Growth news in the statement"
+        mechanism: "FOMC statement can convey growth optimism separately from rates"
+        proxy_variable: "fomc_statement_sentiment"
+        handling: include_covariate
+    applicable_policy_types: [monetary]
+    wave_hint: 1
+
+  # Gilchrist and Zakrajsek 2012, excess bond premium shocks. Widening
+  # credit spreads forecast equity drawdown over 1 to 3 months.
+  - id: credit_spread_to_equity
+    description: "High yield spread widening predicts equity drawdown"
+    shock_variable_template: "high_yield_oas"
+    shock_type: price
+    response_variable_template: "sp500"
+    response_type: price
+    typical_elasticity: -3.0
+    typical_elasticity_range: [-5.0, -1.5]
+    typical_lag_days: 20
+    default_estimator: level_regression
+    default_covariates: ["vix", "dxy", "ism_manufacturing"]
+    common_confounders:
+      - name: "Common recession signal"
+        mechanism: "Both HY spreads and equity respond to recession probability"
+        proxy_variable: "nber_recession_probability"
+        handling: include_covariate
+    applicable_policy_types: [monetary, fiscal, geopolitical]
+    wave_hint: 2
+
+  # Bekaert Hoerova LoDuca 2013. VIX spikes are largely risk aversion and
+  # co move strongly with equity drawdowns.
+  - id: vix_to_equity
+    description: "VIX spikes coincide with equity drawdowns"
+    shock_variable_template: "vix"
+    shock_type: price
+    response_variable_template: "sp500"
+    response_type: price
+    typical_elasticity: -0.5
+    typical_elasticity_range: [-0.8, -0.3]
+    typical_lag_days: 1
+    default_estimator: level_regression
+    default_covariates: ["dxy", "high_yield_oas"]
+    common_confounders:
+      - name: "Volatility as consequence not cause"
+        mechanism: "VIX may be reflecting the drawdown rather than driving it"
+        proxy_variable: "lagged_sp500_return"
+        handling: identification
+    applicable_policy_types: [monetary, geopolitical, fiscal]
+    wave_hint: 1
+
+  # Amiti Redding Weinstein 2019. Near 100 percent pass through of US
+  # 2018 tariffs to border prices on affected goods.
+  - id: tariff_to_import_prices
+    description: "Tariffs pass through near one for one to US border prices on affected goods"
+    shock_variable_template: "effective_tariff_rate"
+    shock_type: price
+    response_variable_template: "import_price_index_affected"
+    response_type: price
+    typical_elasticity: 0.95
+    typical_elasticity_range: [0.75, 1.10]
+    typical_lag_days: 60
+    default_estimator: level_regression
+    default_covariates: ["usd_index", "global_pmi"]
+    common_confounders:
+      - name: "Exchange rate offset"
+        mechanism: "Exporter currency can depreciate to absorb tariff"
+        proxy_variable: "target_country_fx_change"
+        handling: include_covariate
+    applicable_policy_types: [trade]
+    wave_hint: 1
+
+  # Cavallo Gopinath Neiman Tang 2021. Retail price pass through of 2018
+  # tariffs was partial, roughly half of border price pass through.
+  - id: tariff_to_retail_cpi
+    description: "Tariffs transmit partially to retail CPI of affected goods categories"
+    shock_variable_template: "effective_tariff_rate"
+    shock_type: price
+    response_variable_template: "cpi_affected_goods_yoy"
+    response_type: fundamental
+    typical_elasticity: 0.40
+    typical_elasticity_range: [0.20, 0.60]
+    typical_lag_days: 90
+    default_estimator: level_regression
+    default_covariates: ["usd_index", "wti_oil", "wage_growth"]
+    common_confounders:
+      - name: "Retailer margin absorption"
+        mechanism: "Retailers may absorb cost in margins rather than raise prices"
+        proxy_variable: "retail_sector_gross_margin"
+        handling: include_covariate
+    applicable_policy_types: [trade]
+    wave_hint: 2
+
+  # Flaaen Hortacsu Tintelnot 2020 on washing machines, Flaaen Pierce 2024
+  # on steel. Tariff incidence on margins of import intensive producers
+  # varies widely by sector and substitutability.
+  - id: tariff_to_corporate_margins
+    description: "Tariffs compress gross margins of import exposed firms"
+    shock_variable_template: "effective_tariff_rate"
+    shock_type: price
+    response_variable_template: "gross_margin_affected_sector"
+    response_type: fundamental
+    typical_elasticity: -0.50
+    typical_elasticity_range: [-0.80, -0.20]
+    typical_lag_days: 180
+    default_estimator: cross_section
+    default_covariates: ["sector_import_intensity", "domestic_demand_growth"]
+    common_confounders:
+      - name: "Substitution to domestic inputs"
+        mechanism: "Firms can shift sourcing, dampening margin impact"
+        proxy_variable: "domestic_input_share"
+        handling: include_covariate
+      - name: "Exemption rulings"
+        mechanism: "Granted exemptions reduce effective tariff at firm level"
+        proxy_variable: "exemption_share"
+        handling: sample_restriction
+    applicable_policy_types: [trade]
+    wave_hint: 2
+
+  # Huang Lin Liu Lin 2023 on 2018 2019 episode. CNY depreciated roughly
+  # in line with the tariff shock, partially offsetting US tariff cost
+  # through FX channel.
+  - id: tariff_to_target_fx
+    description: "Tariffs on a country depreciate that country currency vs USD"
+    shock_variable_template: "effective_tariff_rate"
+    shock_type: price
+    response_variable_template: "target_country_fx"
+    response_type: price
+    typical_elasticity: -0.40
+    typical_elasticity_range: [-0.70, -0.15]
+    typical_lag_days: 30
+    default_estimator: event_study
+    default_covariates: ["dxy", "target_country_rate_diff"]
+    common_confounders:
+      - name: "Policy response"
+        mechanism: "Target country central bank may intervene to offset"
+        proxy_variable: "target_country_fx_reserves_change"
+        handling: include_covariate
+    applicable_policy_types: [trade]
+    wave_hint: 1
+
+  # Kilian 2009. Oil supply shocks pass through to CPI energy with high
+  # share, but only modestly to core via second round effects.
+  - id: oil_to_cpi_energy
+    description: "Oil price changes pass through to CPI energy component"
+    shock_variable_template: "wti_oil"
+    shock_type: price
+    response_variable_template: "cpi_energy_yoy"
+    response_type: fundamental
+    typical_elasticity: 0.10
+    typical_elasticity_range: [0.05, 0.18]
+    typical_lag_days: 30
+    default_estimator: level_regression
+    default_covariates: ["usd_index", "refining_margin"]
+    common_confounders:
+      - name: "Demand driven oil moves"
+        mechanism: "Oil can rise due to demand, which would reverse the CPI sign"
+        proxy_variable: "global_manufacturing_pmi"
+        handling: sample_restriction
+    applicable_policy_types: [geopolitical, trade]
+    wave_hint: 2
+
+  # Hooker 2002, Clark Terry 2010. Second round pass through of oil to
+  # core is small in post 1984 sample, larger in 1970s regime.
+  - id: oil_to_cpi_core
+    description: "Oil price changes pass through weakly to core CPI in modern regime"
+    shock_variable_template: "wti_oil"
+    shock_type: price
+    response_variable_template: "cpi_core_yoy"
+    response_type: fundamental
+    typical_elasticity: 0.03
+    typical_elasticity_range: [0.01, 0.07]
+    typical_lag_days: 180
+    default_estimator: level_regression
+    default_covariates: ["unemployment_gap", "inflation_expectations_5y"]
+    common_confounders:
+      - name: "Regime shift"
+        mechanism: "1970s core pass through much higher than post 1984 sample"
+        proxy_variable: "decade_indicator"
+        handling: sample_restriction
+    applicable_policy_types: [geopolitical]
+    wave_hint: 3
+
+  # Chen Rogoff 2003, Cashin Cespedes Sahay 2004. Commodity currencies
+  # co move strongly with their commodity basket.
+  - id: commodity_to_em_fx
+    description: "Commodity price shocks move commodity exporter currencies"
+    shock_variable_template: "commodity_basket"
+    shock_type: price
+    response_variable_template: "em_commodity_fx_index"
+    response_type: price
+    typical_elasticity: 0.50
+    typical_elasticity_range: [0.30, 0.75]
+    typical_lag_days: 5
+    default_estimator: level_regression
+    default_covariates: ["dxy", "vix"]
+    common_confounders:
+      - name: "Global risk appetite"
+        mechanism: "Commodities and EM FX both loaded on global risk factor"
+        proxy_variable: "vix_change"
+        handling: include_covariate
+    applicable_policy_types: [geopolitical, monetary]
+    wave_hint: 2
+
+  # Bruno and Shin 2015 dollar cycle, Avdjiev Du Koch Shin 2019. Dollar
+  # strength tightens financial conditions for EM.
+  - id: dollar_to_em_equity
+    description: "USD strength pressures emerging market equity indices"
+    shock_variable_template: "dxy"
+    shock_type: price
+    response_variable_template: "em_equity_index"
+    response_type: price
+    typical_elasticity: -1.0
+    typical_elasticity_range: [-1.8, -0.4]
+    typical_lag_days: 5
+    default_estimator: level_regression
+    default_covariates: ["vix", "us_10y_yield", "oil_wti"]
+    common_confounders:
+      - name: "Common global growth shock"
+        mechanism: "Both USD and EM respond to global growth news"
+        proxy_variable: "global_pmi_surprise"
+        handling: include_covariate
+    applicable_policy_types: [monetary, geopolitical]
+    wave_hint: 2
+
+  # Akram 2009, Reboredo 2012. USD and commodity prices have a stable
+  # negative relationship over most of the post Bretton Woods sample.
+  - id: dollar_to_commodity
+    description: "USD strength reduces USD denominated commodity prices"
+    shock_variable_template: "dxy"
+    shock_type: price
+    response_variable_template: "commodity_basket"
+    response_type: price
+    typical_elasticity: -0.8
+    typical_elasticity_range: [-1.3, -0.4]
+    typical_lag_days: 5
+    default_estimator: level_regression
+    default_covariates: ["global_pmi", "us_real_rate"]
+    common_confounders:
+      - name: "Underlying fundamental shock"
+        mechanism: "A growth shock moves both USD and commodities endogenously"
+        proxy_variable: "global_pmi_change"
+        handling: include_covariate
+    applicable_policy_types: [monetary, geopolitical]
+    wave_hint: 2
+
+  # Ramey and Zubairy 2018. Government spending multiplier around 0.6 in
+  # expansions and 1.0 in recessions, not 1.5 as earlier studies claimed.
+  - id: govt_spending_to_gdp
+    description: "Federal spending shocks raise real GDP with state dependent multiplier"
+    shock_variable_template: "real_govt_spending_shock"
+    shock_type: fundamental
+    response_variable_template: "real_gdp"
+    response_type: fundamental
+    typical_elasticity: 0.8
+    typical_elasticity_range: [0.5, 1.2]
+    typical_lag_days: 180
+    default_estimator: svar_lookup
+    default_covariates: ["output_gap", "fed_funds_rate"]
+    common_confounders:
+      - name: "Regime of slack"
+        mechanism: "Multiplier is larger when output gap is negative"
+        proxy_variable: "output_gap"
+        handling: sample_restriction
+      - name: "Monetary accommodation"
+        mechanism: "ZLB episodes show larger multipliers"
+        proxy_variable: "fed_funds_rate_at_zlb"
+        handling: sample_restriction
+    applicable_policy_types: [fiscal]
+    wave_hint: 3
+
+  # Engen and Hubbard 2004, Laubach 2009. A 1 percent of GDP increase in
+  # expected deficits raises 10y yields by roughly 4 to 5 basis points.
+  - id: deficit_to_long_yield
+    description: "Higher expected deficits raise 10 year Treasury yields"
+    shock_variable_template: "expected_deficit_pct_gdp"
+    shock_type: fundamental
+    response_variable_template: "dgs10"
+    response_type: price
+    typical_elasticity: 4.5
+    typical_elasticity_range: [2.0, 7.0]
+    typical_lag_days: 90
+    default_estimator: level_regression
+    default_covariates: ["fed_funds_rate", "inflation_expectations_10y"]
+    common_confounders:
+      - name: "Growth vs deficit driver"
+        mechanism: "Deficits rise automatically in recessions when yields fall"
+        proxy_variable: "cyclically_adjusted_primary_balance"
+        handling: include_covariate
+    applicable_policy_types: [fiscal]
+    wave_hint: 3
+
+  # Kilian 2009, Caldara Cavallo Iacoviello 2019. Unexpected oil supply
+  # disruptions produce large and persistent oil price increases, with
+  # magnitude depending on disrupted share of global supply.
+  - id: oil_supply_disruption_to_oil
+    description: "Oil supply shocks raise crude prices persistently"
+    shock_variable_template: "supply_disruption_pct_global"
+    shock_type: fundamental
+    response_variable_template: "brent_oil"
+    response_type: price
+    typical_elasticity: 8.0
+    typical_elasticity_range: [4.0, 15.0]
+    typical_lag_days: 30
+    default_estimator: analog_retrieval
+    default_covariates: ["global_inventories", "opec_spare_capacity"]
+    common_confounders:
+      - name: "Endogenous demand reduction"
+        mechanism: "High prices induce demand destruction, moderating the peak"
+        proxy_variable: "global_oil_demand_change"
+        handling: include_covariate
+      - name: "Strategic petroleum reserve release"
+        mechanism: "Government inventory releases cap the price response"
+        proxy_variable: "spr_drawdown"
+        handling: include_covariate
+    applicable_policy_types: [geopolitical]
+    wave_hint: 1
+
+  # Choudhri and Hakura 2006, Gopinath 2015 dominant currency paradigm.
+  # USD invoicing means most EM import prices pass through strongly from
+  # USD moves.
+  - id: dollar_to_em_inflation
+    description: "USD strength raises imported goods inflation in EM economies"
+    shock_variable_template: "dxy"
+    shock_type: price
+    response_variable_template: "em_cpi_yoy"
+    response_type: fundamental
+    typical_elasticity: 0.25
+    typical_elasticity_range: [0.10, 0.45]
+    typical_lag_days: 180
+    default_estimator: cross_section
+    default_covariates: ["country_import_share_gdp", "local_policy_rate"]
+    common_confounders:
+      - name: "Pegged FX regimes"
+        mechanism: "Pegged countries do not reflect USD moves in local FX"
+        proxy_variable: "fx_regime_classification"
+        handling: sample_restriction
+    applicable_policy_types: [monetary, trade]
+    wave_hint: 3
