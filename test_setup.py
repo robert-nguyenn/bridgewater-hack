@@ -9,7 +9,7 @@ load_dotenv()
 print(f"Python: {sys.version.split()[0]}")
 
 checks = {
-    "OPENAI_API_KEY": os.environ.get("OPENAI_API_KEY"),
+    "ANTHROPIC_API_KEY": os.environ.get("ANTHROPIC_API_KEY"),
     "HF_TOKEN": os.environ.get("HF_TOKEN"),
 }
 for name, value in checks.items():
