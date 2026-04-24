@@ -249,4 +249,23 @@ Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
 - [matplotlib](https://matplotlib.org) — per-estimator plots
 - [huggingface_hub](https://github.com/huggingface/huggingface_hub) — dataset access
 - [fastapi](https://fastapi.tiangolo.com) + [uvicorn](https://www.uvicorn.org) — UI backend
+
+## Running the UI
+
+```bash
+.venv/bin/uvicorn src.ui.app:app --reload --port 8000
+# then open http://localhost:8000
+```
+
+Important: always invoke uvicorn via the venv path (or `source .venv/bin/activate`
+first, or `uv run uvicorn ...`). If you run `uvicorn ...` without the venv
+prefix, your shell may pick up a system Python install that does not have
+this project's dependencies, which produces `ModuleNotFoundError: No module
+named 'tenacity'` and similar.
+
+Endpoints:
+- `POST /api/analyze` — start a run, returns `run_id`
+- `GET /api/runs/{run_id}` — status + full ImpactMap (once done)
+- `GET /api/runs` — list past runs
+- `GET /api/plots/{run_id}/{filename}` — PNG plot
 - [sentence-transformers](https://www.sbert.net) + [faiss-cpu](https://github.com/facebookresearch/faiss) — semantic retrieval (Phase 4)
