@@ -21,7 +21,15 @@ from .plotting import plot_level_regression
 
 
 def _to_indexed(series: pl.DataFrame, name: str) -> pd.Series:
-    pdf = series.select(["date", "value"]).to_pandas()
+    """Tolerates FRED-style ['observation_date', 'SERIES_CODE'] column names."""
+    cols = list(series.columns)
+    if "date" in cols and "value" in cols:
+        use = series.select(["date", "value"])
+    elif len(cols) == 2:
+        use = series.rename({cols[0]: "date", cols[1]: "value"}).select(["date", "value"])
+    else:
+        raise ValueError(f"expected 2 columns (date, value), got {cols}")
+    pdf = use.to_pandas()
     pdf["date"] = pd.to_datetime(pdf["date"])
     pdf = pdf.dropna().sort_values("date").drop_duplicates(subset="date")
     s = pdf.set_index("date")["value"]

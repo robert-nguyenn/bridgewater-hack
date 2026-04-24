@@ -41,15 +41,42 @@ def _load_channel_catalog() -> dict[str, dict]:
         return {c["id"]: c for c in yaml.safe_load(fh)["channels"]}
 
 
-def _is_first_link_shock(shock_variable: str) -> bool:
-    """An edge is first link when its shock is not loadable from Tier 1 data.
+def _is_first_link_shock(
+    shock_variable: str,
+    policy: Optional[StructuredPolicy] = None,
+    channel_id: Optional[str] = None,
+    channel_wave_hint: Optional[int] = None,
+) -> bool:
+    """An edge is first link if EITHER
+      (a) the shock variable is not loadable from any data tier (scenario
+          specific like 'hormuz_closure_probability'), or
+      (b) the channel is wave 1 AND the shock variable is the policy subject
+          itself (e.g. FEDFUNDS for a 'Fed cut' scenario).
 
-    Practically: scenario specific variables like 'supply_disruption_pct_global',
-    'strait_of_hormuz_closure_probability', or 'effective_tariff_rate_china_semis'
-    do not resolve, so those edges are marked is_first_link.
+    Rule (b) fixes the case where the scenario shock IS a loadable FRED series
+    (Fed funds, tariff rate, etc) but semantically represents the policy action,
+    so the edge should connect from the scenario root in the UI.
     """
-    from src.loaders import get_data
+    from src.loaders import get_data, ALIASES
+    from src.variable_labels import humanize
 
+    # Rule (b) first: scenario subject match on wave-1 channel
+    if policy and channel_wave_hint == 1:
+        subj = policy.subject.lower().strip()
+        shock_lc = shock_variable.lower().strip()
+
+        # Direct string match
+        if subj == shock_lc:
+            return True
+        # Alias match: "fed_funds_rate" alias -> "FEDFUNDS"
+        subj_resolved = ALIASES.get(subj, "").lower()
+        if subj_resolved and subj_resolved == shock_lc:
+            return True
+        # Label similarity: both humanize to roughly the same thing
+        if humanize(subj).lower() == humanize(shock_variable).lower():
+            return True
+
+    # Rule (a): cannot load any historical series for the shock
     try:
         df = get_data(shock_variable)
         return df is None or df.is_empty()
@@ -86,7 +113,11 @@ def build_graph(
                 wave_hints.append(int(ch["wave_hint"]))
         wave = min(wave_hints) if wave_hints else 1
 
-        first_link = _is_first_link_shock(src)
+        first_link = _is_first_link_shock(
+            src,
+            policy=policy,
+            channel_wave_hint=wave,
+        )
 
         # Typical lag: take median from catalog
         lags: list[int] = []

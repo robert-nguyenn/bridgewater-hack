@@ -25,10 +25,20 @@ from .plotting import plot_event_study
 
 
 def _pl_to_indexed(series: pl.DataFrame) -> pd.Series:
-    """Convert a polars [date, value] frame to a pandas Series indexed by date."""
-    if "date" not in series.columns or "value" not in series.columns:
-        raise ValueError(f"expected [date, value] columns, got {series.columns}")
-    pdf = series.select(["date", "value"]).to_pandas()
+    """Convert a polars frame to a pandas Series indexed by date.
+
+    Tolerates FRED-style ['observation_date', 'SERIES_CODE'] files that may
+    have slipped into the cache with non-normalized column names.
+    """
+    cols = list(series.columns)
+    if "date" in cols and "value" in cols:
+        use = series.select(["date", "value"])
+    elif len(cols) == 2:
+        # Assume first column is the date axis, second is the value column
+        use = series.rename({cols[0]: "date", cols[1]: "value"}).select(["date", "value"])
+    else:
+        raise ValueError(f"expected 2 columns (date, value), got {cols}")
+    pdf = use.to_pandas()
     pdf["date"] = pd.to_datetime(pdf["date"])
     pdf = pdf.dropna().sort_values("date").drop_duplicates(subset="date")
     return pdf.set_index("date")["value"]

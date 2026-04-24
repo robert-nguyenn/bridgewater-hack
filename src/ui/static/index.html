@@ -330,9 +330,17 @@ async function startRun() {
 }
 
 function pollStatus() {
-  if (pollTimer) clearInterval(pollTimer);
+  if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
   const t0 = Date.now();
-  pollTimer = setInterval(async () => {
+  let inFlight = false;
+  let backoffMs = 2000;
+
+  async function tick() {
+    if (inFlight) {
+      pollTimer = setTimeout(tick, 1000);
+      return;
+    }
+    inFlight = true;
     try {
       const data = await fetchJson(`/api/runs/${currentRunId}`);
       renderSteps(data.steps || []);
@@ -343,23 +351,32 @@ function pollStatus() {
 
       const state = data.status?.state;
       if (state === "done" && data.impact_map) {
-        clearInterval(pollTimer);
         currentMap = data.impact_map;
         renderGraph(currentMap);
         renderOverviewDrawer(currentMap);
         LoadingEl.style.display = "none";
         RunBtn.disabled = false;
         loadRuns();
+        return;   // stop polling
       } else if (state === "failed") {
-        clearInterval(pollTimer);
         LoadingEl.style.display = "none";
         RunBtn.disabled = false;
         alert("run failed: " + (data.status.error || "unknown"));
+        return;
       }
+      // Backoff: 2s for first 20s, then 5s for next minute, then 10s
+      if (secs > 80) backoffMs = 10000;
+      else if (secs > 20) backoffMs = 5000;
+      else backoffMs = 2000;
     } catch (e) {
       console.error("poll error", e);
+      backoffMs = Math.min(backoffMs * 1.5, 15000);
+    } finally {
+      inFlight = false;
     }
-  }, 2000);
+    pollTimer = setTimeout(tick, backoffMs);
+  }
+  tick();
 }
 
 // ===== Graph rendering (wave-based horizontal layout) =====
@@ -395,7 +412,37 @@ function renderGraph(impact) {
     ...e,
     source_id: e.is_first_link ? scenarioNodeId : e.source_node,
     target_id: e.target_node,
+    is_virtual: false,
   }));
+
+  // If NO edges are first_link, draw virtual arrows from the scenario root
+  // to every node that is a wave-1 source but never a target. This guarantees
+  // the scenario is visually connected to the graph.
+  if (!edges.some(e => e.is_first_link)) {
+    const targets = new Set(edges.map(e => e.target_id));
+    const wave1Sources = new Set(
+      edges.filter(e => e.wave === 1 && !targets.has(e.source_id))
+           .map(e => e.source_id)
+    );
+    wave1Sources.forEach(srcId => {
+      edges.unshift({
+        source_id: scenarioNodeId,
+        target_id: srcId,
+        source_node: scenarioNodeId,
+        target_node: srcId,
+        wave: 1,
+        is_first_link: true,
+        is_virtual: true,
+        elasticity: { point: 0, low: 0, high: 0, unit: "scenario_trigger" },
+        confidence: { overall: 0.5 },
+        lag_days: 0,
+        method_estimates: [],
+        confounders_tested: [],
+        caveats: [`Scenario trigger: ${impact.policy.subject} drives this variable directly.`],
+        hypothesis_ids: [],
+      });
+    });
+  }
 
   // Stack nodes vertically within each column
   const byCol = d3.group(Array.from(nodeById.values()), n => n.col);
@@ -428,13 +475,15 @@ function renderGraph(impact) {
 
   const linkGroup = SVG.append("g").attr("class", "links");
   linkGroup.selectAll("path").data(edges).join("path")
-    .attr("class", e => "link" + (e.is_first_link ? " first" : ""))
-    .attr("stroke", linkColor)
-    .attr("stroke-width", linkWidth)
-    .attr("stroke-opacity", linkOpacity)
+    .attr("class", e => "link" + (e.is_first_link ? " first" : "") + (e.is_virtual ? " virtual" : ""))
+    .attr("stroke", e => e.is_virtual ? "var(--accent)" : linkColor(e))
+    .attr("stroke-width", e => e.is_virtual ? 2 : linkWidth(e))
+    .attr("stroke-opacity", e => e.is_virtual ? 0.45 : linkOpacity(e))
     .attr("d", e => curve(nodeById.get(e.source_id), nodeById.get(e.target_id)))
     .on("click", (ev, e) => renderEdgeDrawer(e))
-    .append("title").text(e => `${e.source_node} -> ${e.target_node}  β=${e.elasticity?.point?.toFixed(3)}  conf=${e.confidence?.overall?.toFixed(2)}`);
+    .append("title").text(e => e.is_virtual
+      ? `${impact.policy.subject} triggers ${e.target_node}`
+      : `${e.source_node} -> ${e.target_node}  β=${e.elasticity?.point?.toFixed(3)}  conf=${e.confidence?.overall?.toFixed(2)}`);
 
   // Nodes
   const nodeGroup = SVG.append("g").attr("class", "nodes");

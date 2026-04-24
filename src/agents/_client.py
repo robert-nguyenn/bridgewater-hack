@@ -216,8 +216,16 @@ async def call_tool_async(
     max_tokens: int = 4000,
     run_id: Optional[str] = None,
     caller: str = "",
+    enable_web_search: bool = False,
+    web_search_max_uses: int = 5,
 ) -> dict:
-    """Async version of call_tool for parallel invocations. Same caching and logging."""
+    """Async version of call_tool for parallel invocations. Same caching and logging.
+
+    Set enable_web_search=True to give Claude access to Anthropic's server-side
+    web_search tool. Claude uses it transparently; the final response still
+    comes back via tool_name. web_search usage is logged as
+    web_search_requests in the run log.
+    """
     client = get_async_client()
 
     sys_blocks: list[dict[str, Any]] = [
@@ -230,11 +238,25 @@ async def call_tool_async(
             "cache_control": {"type": "ephemeral"},
         })
 
-    tools = [{
+    tools: list[dict[str, Any]] = [{
         "name": tool_name,
         "description": tool_description,
         "input_schema": tool_schema,
     }]
+    if enable_web_search:
+        tools.append({
+            "type": "web_search_20250305",
+            "name": "web_search",
+            "max_uses": web_search_max_uses,
+        })
+
+    # Force custom tool only when NOT using web search (otherwise Claude
+    # needs freedom to call web_search first, then the custom tool).
+    tool_choice: dict[str, Any]
+    if enable_web_search:
+        tool_choice = {"type": "auto"}
+    else:
+        tool_choice = {"type": "tool", "name": tool_name}
 
     t0 = time.time()
     resp = await client.messages.create(
@@ -242,7 +264,7 @@ async def call_tool_async(
         max_tokens=max_tokens,
         system=sys_blocks,
         tools=tools,
-        tool_choice={"type": "tool", "name": tool_name},
+        tool_choice=tool_choice,
         messages=[{"role": "user", "content": user}],
     )
     elapsed = time.time() - t0
@@ -254,6 +276,8 @@ async def call_tool_async(
             break
 
     usage = resp.usage
+    server_use = getattr(usage, "server_tool_use", None)
+    web_search_requests = getattr(server_use, "web_search_requests", 0) if server_use else 0
     _log_call(run_id, {
         "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "caller": caller,
@@ -265,6 +289,7 @@ async def call_tool_async(
         "output_tokens": usage.output_tokens,
         "cache_read_input_tokens": getattr(usage, "cache_read_input_tokens", 0),
         "cache_creation_input_tokens": getattr(usage, "cache_creation_input_tokens", 0),
+        "web_search_requests": web_search_requests,
     })
 
     if tool_input is None:

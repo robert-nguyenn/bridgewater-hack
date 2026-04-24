@@ -139,6 +139,12 @@ def _catalog_sha() -> str:
     return hashlib.sha1(EVENT_CATALOG.read_bytes()).hexdigest()
 
 
+def _rows_sha(rows: list[dict]) -> str:
+    """Hash for an arbitrary event row list, so researcher outputs also cache."""
+    joined = "\n".join(_event_text(r) + f"|{r.get('date')}" for r in rows)
+    return hashlib.sha1(joined.encode("utf-8")).hexdigest()
+
+
 def _event_text(row: dict) -> str:
     """What we embed for each event. Pandas NaN and None both coerce to ''."""
     def _str(v):
@@ -155,14 +161,18 @@ def _event_text(row: dict) -> str:
 
 
 def _ensure_event_embeddings(catalog_rows: list[dict]) -> np.ndarray:
-    """Embed catalog events. Cached to disk by catalog content hash."""
+    """Embed event rows. Cached in memory by content hash so repeated calls
+    with the same researcher output do not re-embed.
+    """
     global _EVENT_EMBED_CACHE
-    sha = _catalog_sha()
+    sha = _rows_sha(catalog_rows)
 
     if _EVENT_EMBED_CACHE and _EVENT_EMBED_CACHE[0] == sha:
         return _EVENT_EMBED_CACHE[1]
 
-    if EMBED_CACHE.exists():
+    # On-disk cache only used for the static catalog (backward compat).
+    # Researcher outputs are per run and do not hit disk.
+    if sha == _catalog_sha() and EMBED_CACHE.exists():
         try:
             npz = np.load(EMBED_CACHE, allow_pickle=True)
             if str(npz.get("sha", "")) == sha:
@@ -175,8 +185,9 @@ def _ensure_event_embeddings(catalog_rows: list[dict]) -> np.ndarray:
     model = _get_model()
     texts = [_event_text(r) for r in catalog_rows]
     arr = model.encode(texts, convert_to_numpy=True, show_progress_bar=False, normalize_embeddings=True)
-    EMBED_CACHE.parent.mkdir(parents=True, exist_ok=True)
-    np.savez(EMBED_CACHE, emb=arr, sha=sha)
+    if sha == _catalog_sha():
+        EMBED_CACHE.parent.mkdir(parents=True, exist_ok=True)
+        np.savez(EMBED_CACHE, emb=arr, sha=sha)
     _EVENT_EMBED_CACHE = (sha, arr, catalog_rows)
     return arr
 
@@ -223,25 +234,44 @@ def retrieve_analogs(
     policy: StructuredPolicy,
     response_series: Optional[pl.DataFrame] = None,
     k: int = 5,
+    events: Optional[list[dict]] = None,
 ) -> list[dict]:
-    """Find k nearest historical analogs from the event catalog.
+    """Find k nearest historical analogs from a candidate event pool.
 
-    Returns list of dicts, each with a similarity breakdown so the UI can
-    show WHY the analog was picked.
+    If `events` is provided (typically from event_researcher), use those.
+    Otherwise fall back to the static event_catalog.csv.
+
+    Returns list of dicts, each with a similarity_breakdown field so the UI
+    can show WHY the analog was picked.
     """
-    catalog = _load_catalog()
-    catalog_rows = [
-        {
-            "description": row.get("description", ""),
-            "subject": row.get("subject", ""),
-            "notes": row.get("notes", ""),
-            "policy_type": row["policy_type"],
-            "magnitude": float(row["magnitude"]),
-            "magnitude_unit": row.get("magnitude_unit", ""),
-            "date": row["date"],
-        }
-        for _, row in catalog.iterrows()
-    ]
+    if events is not None and len(events) > 0:
+        catalog_rows = [
+            {
+                "description": (e.get("description") or "").strip(),
+                "subject": (e.get("subject") or "").strip(),
+                "notes": (e.get("relevance_notes") or e.get("notes") or "").strip(),
+                "policy_type": e.get("policy_type", "").strip(),
+                "magnitude": float(e.get("magnitude") or 0.0),
+                "magnitude_unit": (e.get("magnitude_unit") or "").strip(),
+                "date": pd.to_datetime(e.get("date")),
+            }
+            for e in events
+            if e.get("description") and e.get("date")
+        ]
+    else:
+        catalog = _load_catalog()
+        catalog_rows = [
+            {
+                "description": row.get("description", ""),
+                "subject": row.get("subject", ""),
+                "notes": row.get("notes", ""),
+                "policy_type": row["policy_type"],
+                "magnitude": float(row["magnitude"]),
+                "magnitude_unit": row.get("magnitude_unit", ""),
+                "date": row["date"],
+            }
+            for _, row in catalog.iterrows()
+        ]
     if not catalog_rows:
         return []
 

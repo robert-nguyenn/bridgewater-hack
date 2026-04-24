@@ -32,6 +32,7 @@ from typing import Optional
 from src.agents._client import DEFAULT_MODEL, new_run_id
 from src.agents.adversary import adversarial_review_async
 from src.agents.coordinator import select_channels
+from src.agents.event_researcher import research_events_async
 from src.agents.policy_parser import parse_policy
 from src.agents.reviewer import review_all_edges_async
 from src.agents.specialists import SPECIALIST_IDS, run_all_specialists_parallel
@@ -101,6 +102,15 @@ async def run_impact_analysis_async(
           elapsed_s=round(time.time() - t0, 1),
           n_channels=len(channels))
     _save_intermediate(run_id, "channels", {"channel_ids": channels})
+
+    # -------- Step 2.5: event researcher (web search) --------
+    # Runs concurrently with specialists. Both take similar time but the
+    # researcher output is only needed downstream (analog retrieval), so we
+    # kick it off in parallel and await later.
+    t_research = time.time()
+    events_task = asyncio.create_task(
+        research_events_async(policy, run_id=run_id, model=model)
+    )
 
     # -------- Step 3: specialists in parallel --------
     t0 = time.time()
@@ -222,18 +232,36 @@ async def run_impact_analysis_async(
           pruned=pre_prune_count - len(edges),
           kept=len(edges))
 
-    # -------- Step 9: analog retrieval at the scenario level --------
+    # -------- Step 9: analog retrieval, conditioned on researcher events --------
+    # Await the researcher task (may still be running).
+    try:
+        researched_events = await events_task
+    except Exception as exc:
+        print(f"    [event_researcher] raised: {type(exc).__name__}: {exc}")
+        researched_events = []
+    _step(run_id, "event_researcher",
+          elapsed_s=round(time.time() - t_research, 1),
+          n_events=len(researched_events),
+          source="web_search" if researched_events else "static_catalog_fallback")
+    if researched_events:
+        _save_intermediate(run_id, "researched_events", researched_events)
+
     t0 = time.time()
-    # Use a representative response series for the overall analog run: brent oil
     try:
         brent = get_data("DCOILBRENTEU")
-        scenario_analogs = retrieve_analogs(policy, response_series=brent, k=5)
+        scenario_analogs = retrieve_analogs(
+            policy,
+            response_series=brent,
+            k=5,
+            events=researched_events or None,   # None -> fall back to static catalog
+        )
     except Exception as exc:
         print(f"    [analog_retrieval] degraded: {type(exc).__name__}: {exc}")
         scenario_analogs = []
     _step(run_id, "analog_retrieval",
           elapsed_s=round(time.time() - t0, 1),
-          n_analogs=len(scenario_analogs))
+          n_analogs=len(scenario_analogs),
+          event_pool=len(researched_events) if researched_events else 0)
 
     # -------- Step 10: assemble --------
     data_availability = _build_data_availability_report(enriched, estimates_by_hid)
